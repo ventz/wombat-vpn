@@ -117,12 +117,6 @@
     box-shadow: 0 6px 18px rgba(0,0,0,.45);
   }
 
-  .btn-soon {
-    background: var(--panel);
-    border: 1px dashed var(--line);
-    color: var(--muted);
-    cursor: default;
-  }
 
   .btn-ghost {
     background: var(--panel);
@@ -305,10 +299,10 @@
     </p>
 
     <div class="actions">
-      <span class="btn btn-soon">
-        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8.75-4.25v3.94l2.53 1.46a.75.75 0 1 1-.75 1.3l-2.9-1.67A.75.75 0 0 1 7.25 8V3.75a.75.75 0 0 1 1.5 0Z"/></svg>
-        Download coming soon
-      </span>
+      <a class="btn btn-primary" href="/Wombat.dmg">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a.75.75 0 0 1 .75.75v7.19l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 0 1 1.06-1.06l2.22 2.22V1.75A.75.75 0 0 1 8 1ZM2.75 12a.75.75 0 0 1 .75.75v.75h9v-.75a.75.75 0 0 1 1.5 0v1.5a.75.75 0 0 1-.75.75h-10.5a.75.75 0 0 1-.75-.75v-1.5a.75.75 0 0 1 .75-.75Z"/></svg>
+        Download for macOS
+      </a>
       <a class="btn btn-ghost" href="https://github.com/ventz/wombat-wireguard-mac-app">
         <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>
         Source on GitHub
@@ -316,7 +310,7 @@
     </div>
 
     <p class="meta" id="release">
-      In development &middot; macOS 15+ &middot; universal (Apple silicon &amp; Intel) &middot; MIT licensed
+      macOS 15+ &middot; universal (Apple silicon &amp; Intel) &middot; signed and notarized &middot; MIT licensed
     </p>
   </header>
 <main>
@@ -490,8 +484,8 @@ peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
   </footer>
 </div>
 <script>
-  // Once releases exist, the version comes from the live Sparkle feed, so the page never needs
-  // editing for a release. Until then (or if the feed can't be read) the static line stays.
+  // The version comes from the live Sparkle feed, so the page never needs editing for a
+  // release. If the feed can't be read, the static line stays.
   fetch("/appcast.xml", { cache: "no-cache" })
     .then(r => r.ok ? r.text() : Promise.reject(r.status))
     .then(xml => {

@@ -57,22 +57,24 @@ Wombat speaks standard wg-quick `.conf` files and imports the official app's
 
 ## Quick Install
 
-Wombat isn't released yet. To build it from source you need Xcode 26+, Go, XcodeGen and a paid
-Apple Developer account: macOS only runs VPN system extensions that are Developer ID signed.
+1. Download **[Wombat.dmg](https://wombat.vpetkov.net/Wombat.dmg)** (always the latest version;
+   also on [GitHub Releases](https://github.com/ventz/wombat-wireguard-mac-app/releases)).
+2. Open it and drag **Wombat** into **Applications** (network extensions only run from there).
+3. Open Wombat, then allow its network extension once: **System Settings › General › Login Items
+   & Extensions** › **Extensions** › **By Category** › **ⓘ** next to **Network Extensions** › turn
+   on **Wombat.app** › **Done**.
+
+Wombat is signed with a Developer ID, notarized by Apple, and updates itself. Requires macOS 15
+or later (Apple silicon or Intel).
+
+To build from source instead (needs a paid Apple Developer account: macOS only runs VPN system
+extensions that are Developer ID signed), see [docs/DEVELOPING.md](docs/DEVELOPING.md):
 
 ```bash
 brew install go xcodegen
 git clone https://github.com/ventz/wombat-wireguard-mac-app && cd wombat-wireguard-mac-app
-scripts/build-signed.sh --install     # Developer ID signed, notarized, copied to /Applications
+scripts/build-signed.sh --install
 ```
-
-Then allow the network extension, once:
-
-1. Open **System Settings › General › Login Items & Extensions**.
-2. Scroll to **Extensions** and choose **By Category**.
-3. Click **ⓘ** next to **Network Extensions**, turn on **Wombat.app**, and click **Done**.
-
-See [docs/DEVELOPING.md](docs/DEVELOPING.md) for signing details.
 
 ## Features
 
