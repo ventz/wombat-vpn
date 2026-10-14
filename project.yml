@@ -1,0 +1,137 @@
+name: Wombat
+options:
+  bundleIdPrefix: net.vpetkov
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  TunnelCore:
+    path: Packages/TunnelCore
+  # Self-updates for the Developer ID app (feed: wombat.vpetkov.net/appcast.xml). Same version
+  # as Moo; bump on purpose.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.9.6
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: 8J9W3ZG4ZN
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: 1.0.0
+    CURRENT_PROJECT_VERSION: 11
+    SWIFT_VERSION: "5.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    DEAD_CODE_STRIPPING: YES
+    GCC_TREAT_WARNINGS_AS_ERRORS: NO
+    APP_DISPLAY_NAME: Wombat
+    APP_BUNDLE_ID: net.vpetkov.wombat
+  configs:
+    Debug:
+      APP_DISPLAY_NAME: Wombat Debug
+      APP_BUNDLE_ID: net.vpetkov.wombat.debug
+      ONLY_ACTIVE_ARCH: YES
+      # Development profiles only carry the plain value; Developer ID needs the -systemextension one.
+      NE_PACKET_TUNNEL: packet-tunnel-provider
+    Release:
+      ONLY_ACTIVE_ARCH: NO
+      NE_PACKET_TUNNEL: packet-tunnel-provider-systemextension
+
+targets:
+  Wombat:
+    type: application
+    platform: macOS
+    sources:
+      - App
+      - Shared
+      - path: Resources
+        buildPhase: resources
+    dependencies:
+      - package: TunnelCore
+      - package: Sparkle
+      # Built first, embedded by the script below: XcodeGen resolves the product file name once,
+      # from the first configuration, so its copy phase looked for the Debug name in Release.
+      - target: WombatTunnel
+        embed: false
+      - target: wombat-cli
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
+    postCompileScripts:
+      - name: Embed system extension
+        script: |
+          set -euo pipefail
+          ext="$APP_BUNDLE_ID.tunnel.systemextension"
+          dest="$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Library/SystemExtensions"
+          mkdir -p "$dest"
+          /bin/rm -rf "$dest/$ext"
+          /usr/bin/ditto "$BUILT_PRODUCTS_DIR/$ext" "$dest/$ext"
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(APP_BUNDLE_ID).tunnel.systemextension
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/SystemExtensions/$(APP_BUNDLE_ID).tunnel.systemextension
+    settings:
+      base:
+        PRODUCT_NAME: $(APP_DISPLAY_NAME)
+        PRODUCT_MODULE_NAME: Wombat
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID)
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/Wombat.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        # The embed script reads the extension through BUILT_PRODUCTS_DIR, which archives make a
+        # symlink into UninstalledProducts, outside what the script sandbox allows.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+  WombatTunnel:
+    type: system-extension
+    platform: macOS
+    sources:
+      - Tunnel
+      - Shared
+      - path: Vendor/WireGuardKit/Sources/WireGuardKit
+      - path: Vendor/WireGuardKit/Sources/WireGuardKitC
+        excludes: ["module.modulemap"]
+    dependencies:
+      - package: TunnelCore
+      - sdk: NetworkExtension.framework
+      - sdk: libresolv.tbd
+    preBuildScripts:
+      - name: Build wireguard-go bridge
+        script: |
+          ARCHS="$ARCHS" MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" "$PROJECT_DIR/scripts/build-wg-go.sh"
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(PROJECT_DIR)/build/wg-go/libwg-go.a
+    settings:
+      base:
+        PRODUCT_NAME: $(APP_BUNDLE_ID).tunnel
+        PRODUCT_MODULE_NAME: WombatTunnel
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).tunnel
+        INFOPLIST_FILE: Tunnel/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Tunnel/Tunnel.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: Tunnel/Tunnel-Bridging-Header.h
+        OTHER_LDFLAGS: $(PROJECT_DIR)/build/wg-go/libwg-go.a
+        SKIP_INSTALL: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+  wombat-cli:
+    type: tool
+    platform: macOS
+    sources:
+      - CLI
+      - Shared
+    dependencies:
+      - package: TunnelCore
+    settings:
+      base:
+        PRODUCT_NAME: wombat
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).cli
+        INFOPLIST_FILE: CLI/Info.plist
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        CODE_SIGN_ENTITLEMENTS: CLI/cli.entitlements
+        SKIP_INSTALL: YES
+        OTHER_CODE_SIGN_FLAGS: --identifier $(APP_BUNDLE_ID).cli

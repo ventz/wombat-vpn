@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Developer ID export re-signs the app, the system extension and the CLI with the
+	     Developer ID certificate and Developer ID provisioning profiles (created on demand with
+	     -allowProvisioningUpdates). The profiles are what grant the Network Extension
+	     entitlement's -systemextension values, which development profiles never carry. -->
+	<key>method</key>
+	<string>developer-id</string>
+	<key>teamID</key>
+	<string>8J9W3ZG4ZN</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<!-- release.sh notarizes and staples in its own steps. -->
+	<key>destination</key>
+	<string>export</string>
+</dict>
+</plist>

@@ -1,0 +1,36 @@
+# Local and private files: never commit
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+.claude/
+.mcp.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p8
+*.p12
+*sparkle*key*
+secrets/
+private/
+.private/
+sessions/
+.sessions/
+*.session
+.DS_Store
+
+# Build output
+build/
+.build/
+DerivedData/
+*.xcodeproj/
+xcuserdata/
+
+# Tunnel configs contain private keys: never commit real ones
+*.conf
+!**/Fixtures/**/*.conf
+*.zip
+
+# Screenshots are published to R2, not committed (sources in build/screenshots/raw)
+site/screenshots/

@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Wombat: a native WireGuard client for macOS</title>
+<meta name="description" content="A native, free and open-source WireGuard client for macOS, built security-first: SwiftUI app, Apple Network Extension, kill switch, on-demand, and a full command line for developers.">
+<link rel="icon" href="/icon.png" type="image/png">
+<meta property="og:title" content="Wombat">
+<meta property="og:description" content="A native, free and open-source WireGuard client for macOS, built security-first: SwiftUI app, Apple Network Extension, kill switch, on-demand, and a full command line for developers.">
+<meta property="og:image" content="https://wombat.vpetkov.net/icon.png">
+<meta property="og:type" content="website">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #120d0e;
+    --panel: #1d1516;
+    --line: #3a2628;
+    --ink: #f6eeee;
+    --muted: #b7a3a5;
+    --red: #c8323a;
+    --red-deep: #8f1b21;
+    --red-lift: #e25a61;
+    --green: #4ade80;
+    --code: #0b0809;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    padding: 0 20px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    top: -300px;
+    left: 50%;
+    width: 900px;
+    height: 900px;
+    margin-left: -450px;
+    background: radial-gradient(circle, rgba(200,50,58,.22) 0%, rgba(200,50,58,.06) 42%, transparent 68%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* The page column; header, main and footer are siblings inside it (landmarks). */
+  .page {
+    position: relative;
+    z-index: 1;
+    max-width: 780px;
+    margin: 0 auto;
+    padding-block: clamp(56px, 12vw, 104px) 64px;
+  }
+
+  header { text-align: center; }
+
+  .icon {
+    width: 132px;
+    height: 132px;
+    display: block;
+    margin: 0 auto 26px;
+    border-radius: 27%;
+    filter: drop-shadow(0 18px 38px rgba(0,0,0,.6));
+  }
+
+  h1 {
+    margin: 0;
+    font-size: clamp(38px, 8vw, 54px);
+    line-height: 1.08;
+    letter-spacing: -.022em;
+    font-weight: 700;
+  }
+
+  .tagline {
+    margin: 18px auto 0;
+    max-width: 32em;
+    font-size: clamp(16px, 2.4vw, 18.5px);
+    color: var(--muted);
+  }
+
+  .tagline strong { color: var(--ink); font-weight: 600; }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 34px;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    padding: 13px 24px;
+    border-radius: 11px;
+    font-size: 15.5px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: transform .12s ease, background-color .12s ease;
+  }
+
+  a.btn:hover { transform: translateY(-1px); }
+  a.btn:active { transform: translateY(0); }
+
+  .btn-primary {
+    background: linear-gradient(180deg, var(--red-lift), var(--red));
+    color: #fff;
+    box-shadow: 0 6px 18px rgba(0,0,0,.45);
+  }
+
+  .btn-soon {
+    background: var(--panel);
+    border: 1px dashed var(--line);
+    color: var(--muted);
+    cursor: default;
+  }
+
+  .btn-ghost {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    color: inherit;
+  }
+  a.btn-ghost:hover { background: var(--line); }
+
+  .btn svg { width: 17px; height: 17px; flex: none; }
+
+  .meta {
+    margin-top: 18px;
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+
+  .rule {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--line) 22%, var(--line) 78%, transparent);
+    margin: 60px 0 46px;
+    border: 0;
+  }
+
+  .eyebrow {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: .14em;
+    color: var(--muted);
+    font-weight: 600;
+    margin: 0 0 12px;
+    text-align: center;
+  }
+
+  /* The three pillars, in the order they matter: security, ease, power */
+  h2 {
+    font-size: clamp(26px, 4vw, 34px);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    text-align: center;
+    margin: 0 0 12px;
+    line-height: 1.15;
+  }
+
+  .lead {
+    margin: 0 auto 28px;
+    max-width: 38em;
+    text-align: center;
+    color: var(--muted);
+  }
+
+  .subhead { margin: 34px 0 14px; }
+
+  .why {
+    margin: 0 auto;
+    max-width: 36em;
+    text-align: center;
+    color: var(--muted);
+  }
+
+  .why strong { color: var(--ink); }
+
+  /* The command line, shown as it looks in a terminal */
+  .terminal {
+    margin: 0;
+    background: var(--code);
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    overflow: hidden;
+    box-shadow: 0 20px 50px rgba(0,0,0,.45);
+  }
+
+  .terminal .chrome {
+    display: flex;
+    gap: 7px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .terminal .chrome i { width: 11px; height: 11px; border-radius: 50%; background: #3d2c2e; }
+
+  .terminal pre {
+    margin: 0;
+    padding: 18px 20px 20px;
+    overflow-x: auto;
+    font: 13.5px/1.7 ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--ink);
+  }
+
+  .terminal .p { color: var(--red-lift); user-select: none; }
+  .terminal .c { color: var(--muted); }
+  .terminal .ok { color: var(--green); }
+
+  .features {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+    gap: 14px;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .features li {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    padding: 18px 19px;
+  }
+
+  .features h3 { display: block; font-size: 18px; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 6px; }
+  .features span { font-size: 14px; color: var(--muted); line-height: 1.55; }
+
+  .callout {
+    margin: 26px 0 0;
+    padding: 14px 18px;
+    border-radius: 13px;
+    border: 1px solid rgba(200,50,58,.4);
+    background: rgba(200,50,58,.08);
+    font-size: 14px;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  .callout strong { color: var(--ink); }
+
+  .hero {
+    display: block;
+    width: min(1040px, calc(100vw - 32px));
+    height: auto;
+    margin: 46px 0 0 50%;
+    transform: translateX(-50%);
+  }
+
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(440px, 100%), 1fr));
+    /* Each figure spans three shared rows (title, image, caption) through subgrid, so titles and
+       captions line up across a row even when the screenshots differ in height. */
+    grid-auto-rows: auto;
+    gap: 0 22px;
+    width: min(1040px, calc(100vw - 32px));
+    margin-left: 50%;
+    transform: translateX(-50%);
+  }
+
+  .gallery figure {
+    margin: 0 0 30px;
+    text-align: center;
+    display: grid;
+    grid-row: span 3;
+    grid-template-rows: subgrid;
+    row-gap: 0;
+  }
+  .gallery h3 { display: block; font-size: 18px; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 10px; align-self: end; }
+  .gallery img { width: 100%; height: auto; display: block; align-self: center; }
+  .gallery figcaption { font-size: 13.5px; color: var(--muted); margin-top: 6px; align-self: start; }
+  .gallery .narrow img { width: 62%; margin: 0 auto; }
+
+  footer {
+    margin-top: 62px;
+    text-align: center;
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+
+  footer .tm { font-size: 12px; margin-top: 14px; opacity: .85; }
+
+  a { color: var(--red-lift); }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="page">
+<header>
+    <img class="icon" src="/icon.png" alt="" width="132" height="132" onerror="this.remove()">
+    <h1>Wombat</h1>
+    <p class="tagline">
+      A <strong>native</strong>, <strong>free</strong> and <strong>open-source</strong> WireGuard®
+      client for macOS. <strong>Secure</strong> first, <strong>easy and beautiful</strong> to use,
+      and <strong>powerful</strong> when you need it, with a command line developers will actually use.
+    </p>
+
+    <div class="actions">
+      <span class="btn btn-soon">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8.75-4.25v3.94l2.53 1.46a.75.75 0 1 1-.75 1.3l-2.9-1.67A.75.75 0 0 1 7.25 8V3.75a.75.75 0 0 1 1.5 0Z"/></svg>
+        Download coming soon
+      </span>
+      <a class="btn btn-ghost" href="https://github.com/ventz/wombat-wireguard-mac-app">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>
+        Source on GitHub
+      </a>
+    </div>
+
+    <p class="meta" id="release">
+      In development &middot; macOS 15+ &middot; universal (Apple silicon &amp; Intel) &middot; MIT licensed
+    </p>
+  </header>
+<main>
+
+  <img class="hero" src="/screenshots/overview-dark.webp?v=4" width="1600" height="1063"
+       alt="Wombat's main window: a connected tunnel named Home with received and sent totals, the latest handshake, its interface and its peer">
+
+  <hr class="rule">
+
+  <h2>Why another WireGuard app</h2>
+  <p class="why">
+    The official macOS client has been <strong>effectively abandoned</strong> since early 2023.
+    The alternatives are either not native, not pretty, or not free. Wombat is a modern
+    replacement that feels like part of macOS, imports your existing tunnels in a minute
+    (including the official app's <strong>Export Tunnels to Zip</strong>), and never needs a root
+    helper.
+  </p>
+
+  <hr class="rule">
+
+  <p class="eyebrow">1 &middot; Security</p>
+  <h2>Security comes first</h2>
+  <p class="lead">
+    Every design decision starts here: where your keys live, what runs as root, what a config
+    file is allowed to do, and what any other program on your Mac can change.
+  </p>
+  <ul class="features">
+    <li>
+      <h3>No root helper</h3>
+      <span>No privileged daemon and no sudoers rules. The tunnel runs only inside Apple's sandboxed Network Extension.</span>
+    </li>
+    <li>
+      <h3>Keys stay private</h3>
+      <span>Configs live in your keychain and in a root-only store, never in the VPN preferences file every user can read. The extension never hands a key back, and keys never reach the logs.</span>
+    </li>
+    <li>
+      <h3>Leak protection by default</h3>
+      <span>Full-tunnel configs get the kill switch and a blocked local network out of the box, guarding against TunnelVision and LocalNet attacks. A full tunnel that covers only IPv4 blocks IPv6 instead of leaking it.</span>
+    </li>
+    <li>
+      <h3>Configs can't run code</h3>
+      <span>PostUp, PreDown and friends are flagged and ignored. A downloaded config can never execute a command.</span>
+    </li>
+    <li>
+      <h3>The CLI can't weaken you quietly</h3>
+      <span>Imports, deletes, renames, switching tunnels and anything that lowers protection from the command line need your approval or Touch ID in the app.</span>
+    </li>
+    <li>
+      <h3>Signed, end to end</h3>
+      <span>Developer ID signed and notarized, with the hardened runtime. The app, the extension and the CLI check each other's code signatures before they talk, and updates are signed on top.</span>
+    </li>
+    <li>
+      <h3>Safe on shared Macs</h3>
+      <span>Each macOS user sees and starts only their own tunnels, even though VPN settings are system-wide.</span>
+    </li>
+    <li>
+      <h3>A current engine</h3>
+      <span>Built on the 2025 wireguard-go release, not the 2023 one the official app still ships, plus our own fixes for crashes and sleep.</span>
+    </li>
+  </ul>
+
+  <hr class="rule">
+
+  <p class="eyebrow">2 &middot; Easy and beautiful</p>
+  <h2>Feels like part of macOS</h2>
+  <p class="lead">
+    A SwiftUI app and menu bar item that look and behave like Apple made them. Import your
+    tunnels in a minute and see exactly what each one does.
+  </p>
+  <div class="gallery">
+    <figure class="narrow">
+      <h3>Menu bar</h3>
+      <img src="/screenshots/menubar-dark.webp?v=4" width="824" height="862" loading="lazy"
+           alt="The menu bar popover with a switch for each tunnel and live transfer for the connected one">
+      <figcaption>Every tunnel one click away, with live transfer.</figcaption>
+    </figure>
+    <figure>
+      <h3>Import review</h3>
+      <img src="/screenshots/import-dark.webp?v=4" width="1504" height="1264" loading="lazy"
+           alt="The import sheet showing two tunnels; one is flagged for a PostUp script, missing DNS and an IPv6 leak">
+      <figcaption>See where traffic goes, and what's risky, before anything is saved.</figcaption>
+    </figure>
+    <figure>
+      <h3>Connection: on demand and kill switch</h3>
+      <img src="/screenshots/connection-dark.webp?v=4" width="1600" height="1063" loading="lazy"
+           alt="On-demand settings with Wi-Fi and Ethernet switches, trusted networks, and the kill switch">
+      <figcaption>macOS runs the rules, even with the app closed.</figcaption>
+    </figure>
+    <figure>
+      <h3>Config file</h3>
+      <img src="/screenshots/config-file-dark.webp?v=4" width="1600" height="1063" loading="lazy"
+           alt="The Config File tab showing the wg-quick text with keys hidden">
+      <figcaption>Plain wg-quick text. Keys stay hidden until Touch ID.</figcaption>
+    </figure>
+  </div>
+
+  <ul class="features subhead">
+    <li>
+      <h3>Truly native</h3>
+      <span>Tunnels live in Apple's Network Extension: they show in System Settings and keep running with the app closed.</span>
+    </li>
+    <li>
+      <h3>Import anything</h3>
+      <span>Drop in .conf files, a zip of them (including the official app's export), or paste from the clipboard.</span>
+    </li>
+    <li>
+      <h3>Live status</h3>
+      <span>Handshakes, endpoints and transfer per peer, in the window and the menu bar.</span>
+    </li>
+    <li>
+      <h3>Accessible</h3>
+      <span>VoiceOver labels and announcements, keyboard shortcuts for the common actions, and status shown by shape as well as color.</span>
+    </li>
+  </ul>
+
+  <hr class="rule">
+
+  <p class="eyebrow">3 &middot; Powerful</p>
+  <h2>Powerful when you need it</h2>
+  <p class="lead">
+    Automatic connections, a config linter, and a complete command line for scripts, CI and
+    coding agents.
+  </p>
+  <figure class="terminal" aria-label="Example terminal session using the wombat command">
+    <div class="chrome" aria-hidden="true"><i></i><i></i><i></i></div>
+<pre tabindex="0" aria-label="Terminal output (scrolls sideways)"><span class="p">$ </span>wombat status
+<span class="ok">●</span> home     connected  since 9:41 AM  vpn.example.com:51820
+○ office   disconnected  on-demand  kill-switch
+<span class="p">$ </span>wombat show home
+peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+  latest handshake: 42 s ago
+  transfer: 1.2 GB received, 88 MB sent
+<span class="p">$ </span>wombat check deploy/*.conf --strict   <span class="c"># lint in CI, exit 1 on risks</span>
+<span class="p">$ </span>wombat genkey | tee priv.key | wombat pubkey
+<span class="p">$ </span>wombat logs -f</pre>
+  </figure>
+
+  <ul class="features subhead">
+    <li>
+      <h3>On demand</h3>
+      <span>Connect automatically on Wi-Fi and Ethernet, except on networks you trust. macOS runs the rules, even with the app closed.</span>
+    </li>
+    <li>
+      <h3>Kill switch</h3>
+      <span>Traffic goes only through the tunnel, also while it reconnects (within what macOS allows; see the docs), with an option to allow the local network.</span>
+    </li>
+    <li>
+      <h3>Config review</h3>
+      <span>Catches DNS leaks, IPv6 leaks, overlapping AllowedIPs, DNS servers outside the tunnel and ignored PostUp scripts.</span>
+    </li>
+    <li>
+      <h3>A real CLI</h3>
+      <span>Every action from the terminal, JSON output, a linter with CI exit codes, wg-compatible key tools, log streaming, shell completions and a skill for coding agents.</span>
+    </li>
+  </ul>
+
+  <p class="callout">
+    <strong>Free and open source under the MIT license.</strong> Built on wireguard-go and
+    WireGuardKit.
+  </p>
+
+</main>
+  <footer>
+    <a href="https://github.com/ventz/wombat-wireguard-mac-app">Source on GitHub</a> &middot;
+    <a href="https://github.com/ventz/wombat-wireguard-mac-app/blob/main/LICENSE">MIT licensed</a> &middot; &copy; Ventz Petkov
+    <p class="tm">
+      “WireGuard” and the “WireGuard” logo are registered trademarks of Jason A. Donenfeld.
+      Wombat is not affiliated with or endorsed by the WireGuard project.
+      <a href="https://www.wireguard.com/">wireguard.com</a>
+    </p>
+  </footer>
+</div>
+<script>
+  // Once releases exist, the version comes from the live Sparkle feed, so the page never needs
+  // editing for a release. Until then (or if the feed can't be read) the static line stays.
+  fetch("/appcast.xml", { cache: "no-cache" })
+    .then(r => r.ok ? r.text() : Promise.reject(r.status))
+    .then(xml => {
+      const doc = new DOMParser().parseFromString(xml, "application/xml");
+      const item = doc.getElementsByTagName("item")[0];
+      const field = name => item?.getElementsByTagName("sparkle:" + name)[0]?.textContent?.trim();
+      // Feed values are checked and set as text, never markup
+      const numeric = /^\d+(\.\d+){0,3}$/;
+      const version = field("shortVersionString");
+      if (!version || !numeric.test(version)) return;
+      const minimum = field("minimumSystemVersion");
+      const parts = ["Version " + version, "universal (Apple silicon & Intel)"];
+      if (minimum && numeric.test(minimum)) parts.push("macOS " + minimum.replace(/\.0$/, "") + "+");
+      parts.push("signed and notarized", "updates itself");
+      document.getElementById("release").textContent = parts.join(" · ");
+    })
+    .catch(() => {});
+</script>
+</body>
+</html>
