@@ -40,6 +40,7 @@ put() { # put <key> <file> <content-type> <cache-control>; content types without
 echo "==> Publishing site to $BUCKET"
 put index.html site/index.html text/html "max-age=300"
 put icon.png docs/images/icon.png image/png "max-age=86400"
+put og.png site/og.png image/png "max-age=86400"   # link-preview card (scripts/make-og-image.py)
 if [[ -d site/screenshots ]]; then
     for f in site/screenshots/*.webp site/screenshots/*.png; do
         [[ -f "$f" ]] || continue
