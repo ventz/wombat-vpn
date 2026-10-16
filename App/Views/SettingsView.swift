@@ -133,24 +133,69 @@ private struct UpdatesSection: View {
 }
 
 private struct CommandLineSettings: View {
+    private static let linkPath = "/usr/local/bin/wombat"
     private var cliPath: String { Bundle.main.bundlePath + "/Contents/Helpers/wombat" }
-    /// Single-quoted for the shell, with any ' in the path escaped (F-15, WOM-17).
+    /// Single-quoted for the shell, with any ' in the path escaped (F-15, WOM-17). `mkdir` because
+    /// /usr/local/bin doesn't exist on an Apple silicon Mac until something (usually Homebrew's
+    /// installer) creates it; it is already on the default PATH (/etc/paths).
     private var installCommand: String {
-        "sudo ln -sf '\(cliPath.replacingOccurrences(of: "'", with: "'\\''"))' /usr/local/bin/wombat"
+        "sudo mkdir -p /usr/local/bin && sudo ln -sf '\(cliPath.replacingOccurrences(of: "'", with: "'\\''"))' \(Self.linkPath)"
+    }
+
+    private enum LinkState: Equatable {
+        case installed, notInstalled
+        case elsewhere(String)
+    }
+
+    @State private var state: LinkState?
+    @State private var copied = false
+
+    /// The sandbox lets the app read the link (verified 2026-10-16) but not write it: the install
+    /// needs an admin password, so it stays a command the user runs in Terminal.
+    private func readLink() -> LinkState {
+        let fm = FileManager.default
+        guard let dest = try? fm.destinationOfSymbolicLink(atPath: Self.linkPath) else {
+            return fm.fileExists(atPath: Self.linkPath) ? .elsewhere(Self.linkPath) : .notInstalled
+        }
+        let resolved = URL(fileURLWithPath: dest, relativeTo: URL(fileURLWithPath: "/usr/local/bin"))
+            .standardizedFileURL.resolvingSymlinksInPath().path
+        let ours = URL(fileURLWithPath: cliPath).resolvingSymlinksInPath().path
+        return resolved == ours ? .installed : .elsewhere(dest)
     }
 
     var body: some View {
         Form {
             Section {
                 Text("The wombat command controls tunnels from the terminal and scripts: status, connect, import, lint configs, generate keys, stream logs.")
-                LabeledContent("Install") {
-                    Text(installCommand)
-                        .font(.callout.monospaced())
-                        .textSelection(.enabled)
+                LabeledContent("Status") { status }
+                if case .elsewhere(let dest) = state {
+                    Text("\(Self.linkPath) runs \(dest), not this copy of Wombat. Run the command below to point it here.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
-                Button("Copy Install Command") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(installCommand, forType: .string)
+                if state != .installed {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Install")
+                        Text(installCommand)
+                            .font(.callout.monospaced())
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    HStack {
+                        Button(copied ? "Copied" : "Copy Install Command", systemImage: copied ? "checkmark" : "doc.on.doc") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(installCommand, forType: .string)
+                            copied = true
+                        }
+                        Button("Open Terminal", systemImage: "terminal") {
+                            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"))
+                        }
+                    }
+                    Text("Paste the command into Terminal and enter your Mac's password. It links \(Self.linkPath) to the copy inside Wombat, creating /usr/local/bin first, since a new Mac doesn't have it. That folder is already on your PATH, and this page updates once the link is there.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
             } footer: {
                 Text("From the command line, adding, deleting or renaming a tunnel, switching away from a protected one, and anything that lowers protection ask for your approval here; exporting keys and turning the kill switch off ask for Touch ID.")
@@ -162,6 +207,34 @@ private struct CommandLineSettings: View {
             }
         }
         .formStyle(.grouped)
+        .task {
+            // Polls while the page is open, so it turns green as soon as the command has run.
+            while !Task.isCancelled {
+                state = readLink()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+        .task(id: copied) {
+            guard copied else { return }
+            try? await Task.sleep(for: .seconds(2))
+            copied = false
+        }
+    }
+
+    @ViewBuilder private var status: some View {
+        switch state {
+        case .installed:
+            Label("Installed at \(Self.linkPath)", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .elsewhere:
+            Label("Points to another copy", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+        case .notInstalled:
+            Label("Not installed", systemImage: "circle.dashed")
+                .foregroundStyle(.secondary)
+        case nil:
+            Text("Checking…").foregroundStyle(.secondary)
+        }
     }
 }
 

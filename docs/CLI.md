@@ -17,12 +17,16 @@ starts in the background if needed); key and lint commands work offline.
 
 ## Install
 
-The binary ships inside the app. Link it onto your `PATH` (Settings › Command Line shows the exact
-command):
+The binary ships inside the app. Link it onto your `PATH`. Settings › Command Line shows the exact
+command, with a Copy button, and turns green once the link is in place:
 
 ```bash
+sudo mkdir -p /usr/local/bin
 sudo ln -sf "/Applications/Wombat.app/Contents/Helpers/wombat" /usr/local/bin/wombat
 ```
+
+`/usr/local/bin` doesn't exist on a new Apple silicon Mac without Homebrew, hence the `mkdir`. It is
+on the default `PATH` (`/etc/paths`), so no shell change is needed.
 
 Tunnel commands go through the app, so Wombat must be running (`wombat start` opens it). Tunnels
 themselves keep running when the app quits, and the offline tools work without it.
