@@ -143,24 +143,32 @@ private struct CommandLineSettings: View {
     }
 
     private enum LinkState: Equatable {
-        case installed, notInstalled
+        case installed(String), notInstalled
         case elsewhere(String)
     }
 
     @State private var state: LinkState?
     @State private var copied = false
+    private var isInstalled: Bool { if case .installed = state { true } else { false } }
 
     /// The sandbox lets the app read the link (verified 2026-10-16) but not write it: the install
-    /// needs an admin password, so it stays a command the user runs in Terminal.
+    /// needs an admin password, so it stays a command the user runs in Terminal. The Homebrew
+    /// cask links the CLI into Homebrew's bin instead, so that counts as installed too.
     private func readLink() -> LinkState {
-        let fm = FileManager.default
-        guard let dest = try? fm.destinationOfSymbolicLink(atPath: Self.linkPath) else {
-            return fm.fileExists(atPath: Self.linkPath) ? .elsewhere(Self.linkPath) : .notInstalled
-        }
-        let resolved = URL(fileURLWithPath: dest, relativeTo: URL(fileURLWithPath: "/usr/local/bin"))
-            .standardizedFileURL.resolvingSymlinksInPath().path
         let ours = URL(fileURLWithPath: cliPath).resolvingSymlinksInPath().path
-        return resolved == ours ? .installed : .elsewhere(dest)
+        var other: String?
+        for path in [Self.linkPath, "/opt/homebrew/bin/wombat"] {
+            let fm = FileManager.default
+            guard let dest = try? fm.destinationOfSymbolicLink(atPath: path) else {
+                if path == Self.linkPath, fm.fileExists(atPath: path) { other = path }
+                continue
+            }
+            let resolved = URL(fileURLWithPath: dest, relativeTo: URL(fileURLWithPath: (path as NSString).deletingLastPathComponent))
+                .standardizedFileURL.resolvingSymlinksInPath().path
+            if resolved == ours { return .installed(path) }
+            if path == Self.linkPath { other = dest }
+        }
+        return other.map(LinkState.elsewhere) ?? .notInstalled
     }
 
     var body: some View {
@@ -173,7 +181,7 @@ private struct CommandLineSettings: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-                if state != .installed {
+                if !isInstalled {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Install")
                         Text(installCommand)
@@ -223,8 +231,8 @@ private struct CommandLineSettings: View {
 
     @ViewBuilder private var status: some View {
         switch state {
-        case .installed:
-            Label("Installed at \(Self.linkPath)", systemImage: "checkmark.circle.fill")
+        case .installed(let path):
+            Label("Installed at \(path)", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
         case .elsewhere:
             Label("Points to another copy", systemImage: "exclamationmark.triangle.fill")

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Wombat: a native WireGuard client for macOS</title>
-<meta name="description" content="A native, free and open-source WireGuard client for macOS, built security-first: SwiftUI app, Apple Network Extension, kill switch, on-demand, and a full command line for developers.">
+<meta name="description" content="A native, free and open-source WireGuard client for macOS, built security-first: SwiftUI app, Apple Network Extension, kill switch, on-demand, AmneziaWG support, and a full command line for developers.">
 <link rel="icon" href="/icon.png" type="image/png">
 <link rel="apple-touch-icon" href="/icon.png">
 <link rel="canonical" href="https://wombat.vpetkov.net/">
@@ -142,6 +142,7 @@
 
   .meta {
     margin-top: 18px;
+    overflow-wrap: anywhere;
     font-size: 13.5px;
     color: var(--muted);
   }
@@ -322,6 +323,9 @@
       </a>
     </div>
 
+    <p class="meta">
+      or <code>brew install --cask ventz/tap/wombat-wireguard</code>
+    </p>
     <p class="meta" id="release">
       macOS 15+ &middot; universal (Apple silicon &amp; Intel) &middot; signed and notarized &middot; MIT licensed
     </p>
@@ -477,6 +481,14 @@ peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
     <li>
       <h3>A real CLI</h3>
       <span>Every action from the terminal, JSON output, a linter with CI exit codes, wg-compatible key tools, log streaming, shell completions and a skill for coding agents.</span>
+    </li>
+    <li>
+      <h3>AmneziaWG</h3>
+      <span>For networks that block WireGuard: AmneziaWG 1.0 to 2.0 configs import and connect, with junk packets, padding and custom headers. They run on their own engine, and plain tunnels never touch it.</span>
+    </li>
+    <li>
+      <h3>Homebrew</h3>
+      <span><code>brew install --cask ventz/tap/wombat-wireguard</code> installs the app and puts <code>wombat</code> on your PATH, no sudo needed.</span>
     </li>
   </ul>
 

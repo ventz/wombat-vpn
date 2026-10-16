@@ -17,8 +17,9 @@ starts in the background if needed); key and lint commands work offline.
 
 ## Install
 
-The binary ships inside the app. Link it onto your `PATH`. Settings › Command Line shows the exact
-command, with a Copy button, and turns green once the link is in place:
+Installing with Homebrew (`brew install --cask ventz/tap/wombat-wireguard`) links it for you.
+Otherwise the binary ships inside the app; link it onto your `PATH`. Settings › Command Line
+shows the exact command, with a Copy button, and turns green once the link is in place:
 
 ```bash
 sudo mkdir -p /usr/local/bin

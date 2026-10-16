@@ -16,6 +16,7 @@
 #     (generate_keys --account wombat); never Moo's or Tardy's
 #   - ~/.config/cloudflare/.env with CLOUDFLARE_ADMIN_TOKEN (loaded only for wrangler)
 #   - a logged-in gh, when origin is a GitHub repository
+#   - a checkout of ventz/homebrew-tap at ~/git/homebrew-tap (WOMBAT_TAP_DIR), for the cask
 #
 # Adapted from Moo's release.sh; its guards (signed-feed checks, never overwriting a published
 # archive, cache-busting before first publish) are kept with their reasons.
@@ -47,7 +48,7 @@ while [[ $# -gt 0 ]]; do
         --notes) [[ $# -ge 2 ]] || { echo "--notes needs an .html file" >&2; exit 2; }
                  notes_file="$2"; shift 2 ;;
         --dry-run) dry_run=1; shift ;;
-        -h|--help) sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,23p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -318,6 +319,16 @@ echo "  download: $FEED_HOST/Wombat.dmg   (always the newest release)"
 echo "  this one: $FEED_HOST/$dmg_name"
 echo "  appcast:  $FEED_HOST/appcast.xml"
 echo "  local:    $dmg"
+
+# --- Homebrew tap -------------------------------------------------------------------------------
+
+if [[ -d "${WOMBAT_TAP_DIR:-$HOME/git/homebrew-tap}" ]]; then
+    say "Updating the Homebrew cask"
+    # The release is already out: a failed cask update is reported, not fatal.
+    scripts/update-tap.sh "$version" "$dmg" || echo "  tap:      NOT updated -- rerun scripts/update-tap.sh $version $dmg" >&2
+else
+    say "No Homebrew tap checkout -- skipping the cask (see scripts/update-tap.sh)"
+fi
 
 # --- GitHub release -----------------------------------------------------------------------------
 

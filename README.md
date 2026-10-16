@@ -66,6 +66,12 @@ its traffic from deep packet inspection, so exports from the AmneziaWG app impor
    & Extensions** › **Extensions** › **By Category** › **ⓘ** next to **Network Extensions** › turn
    on **Wombat.app** › **Done**.
 
+Or with [Homebrew](https://brew.sh), which also puts the `wombat` command on your `PATH`:
+
+```bash
+brew install --cask ventz/tap/wombat-wireguard
+```
+
 Wombat is signed with a Developer ID, notarized by Apple, and updates itself. Requires macOS 15
 or later (Apple silicon or Intel).
 
@@ -114,7 +120,8 @@ wombat logs -f                        # stream app and tunnel logs
 ```
 
 `wombat help` lists every command; see [docs/CLI.md](docs/CLI.md) for the reference, exit codes and
-shell completion. To install the CLI, Wombat's Settings › Command Line shows the one-line command.
+shell completion. The Homebrew cask installs the CLI; otherwise Wombat's Settings › Command Line
+shows the command and whether it is installed.
 
 Credit: the command line's scope was modeled on the `ctl` tool of
 [wireguide](https://github.com/korjwl1/wireguide) by korjwl1.
