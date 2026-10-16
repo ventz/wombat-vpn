@@ -91,6 +91,9 @@ scripts/build-signed.sh --install
 
 - **Import anything:** drag in `.conf` files, a zip of them, or paste from the clipboard. Every
   import shows where traffic will go and what's risky before anything is saved.
+- **QR codes:** scan a tunnel's QR code with the Mac's camera (or an iPhone as Continuity
+  Camera), or import a screenshot or picture of one. Going the other way, Show QR Code puts a
+  tunnel on your phone, after Touch ID.
 - **AmneziaWG:** configs with AmneziaWG 1.0 to 2.0 settings (`Jc`, `S1`-`S4`, `H1`-`H4`,
   `I1`-`I5`) run on amneziawg-go and connect to AmneziaWG servers. Plain WireGuard tunnels keep
   running upstream wireguard-go; the two engines share one app.

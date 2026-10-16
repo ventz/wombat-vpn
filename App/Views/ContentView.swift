@@ -33,12 +33,13 @@ struct ContentView: View {
                     Button("Import from Clipboard") {
                         model.importFromClipboard()
                     }
+                    Button("Scan QR Code…") { model.showingScanner = true }
                     Divider()
                     Button("New Empty Tunnel…") { showingNewTunnel = true }
                 } label: {
                     Label("Add Tunnel", systemImage: "plus")
                 }
-                .help("Import .conf files or a zip (⌘O), or create a new tunnel (⌘N)")
+                .help("Import .conf files, a zip or a QR code (⌘O), or create a new tunnel (⌘N)")
             }
             // In this toolbar, not the detail view's: as a centered (.principal) item the picker
             // left the gear stranded before it, and the gear belongs at the trailing edge.
@@ -75,6 +76,13 @@ struct ContentView: View {
         }
         .sheet(isPresented: Binding(get: { !model.pendingImport.isEmpty }, set: { if !$0 { model.pendingImport = [] } })) {
             ImportSheet()
+        }
+        .sheet(isPresented: $model.showingScanner, onDismiss: {
+            guard let text = model.scannedConfig else { return }
+            model.scannedConfig = nil
+            model.stageImport(text: text, name: "QR Code", source: "QR code (camera)")
+        }) {
+            QRScannerSheet()
         }
         .sheet(isPresented: $showingNewTunnel) {
             NewTunnelSheet()
@@ -309,12 +317,13 @@ struct EmptyStateView: View {
                 .frame(width: 96, height: 96)
             Text("No tunnels yet")
                 .font(.title2.weight(.semibold))
-            Text("Drop .conf files here, import the zip from the official app\n(Manage Tunnels › Export Tunnels to Zip), or create a new tunnel.")
+            Text("Drop .conf files or a QR code picture here, import the zip from the official app\n(Manage Tunnels › Export Tunnels to Zip), scan a QR code, or create a new tunnel.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             HStack {
                 Button("Import…") { ImportPanel.present(model: model) }
                     .keyboardShortcut(.defaultAction)
+                Button("Scan QR Code…") { model.showingScanner = true }
                 Button("New Tunnel…") { showingNewTunnel = true }
             }
             .controlSize(.large)

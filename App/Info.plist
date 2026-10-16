@@ -75,6 +75,8 @@
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Wombat uses the camera only while you scan a QR code to import a tunnel. No pictures are saved.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Ventz Petkov. MIT License.</string>
 	<key>WombatAppBundleID</key>

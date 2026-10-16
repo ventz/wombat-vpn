@@ -54,6 +54,9 @@ final class AppModel: ObservableObject {
     @Published var pendingImport: [ImportCandidate] = []
     @Published var selection: UUID?
     @Published var showingQR = false
+    @Published var showingScanner = false
+    /// A configuration the camera read, staged for review once the scanner sheet has closed.
+    var scannedConfig: String?
     /// The detail tab, kept when switching tunnels.
     @Published var detailTab: DetailTab = .overview
     @Published var actionError: String?
@@ -68,10 +71,24 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Clipboard import; says so when there's no text to import (A-L6).
+    /// Clipboard import: configuration text, or an image of a QR code; says so when there's
+    /// neither (A-L6).
     func importFromClipboard() {
-        guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
-            actionError = "The clipboard has no text to import. Copy a WireGuard configuration first."
+        let text = NSPasteboard.general.string(forType: .string) ?? ""
+        // Text that is a configuration wins; an image copied from a browser can come with its URL.
+        if text.range(of: "[Interface]", options: .caseInsensitive) == nil, let data = QRReader.clipboardImageData() {
+            Task {
+                do {
+                    let configs = try await QRReader.configurations(inImageData: data, source: "The clipboard image")
+                    present(Self.candidates(configs, base: "QR Code", source: "QR code (clipboard)"))
+                } catch {
+                    actionError = error.localizedDescription
+                }
+            }
+            return
+        }
+        guard !text.isEmpty else {
+            actionError = "The clipboard has no text or QR code to import. Copy a WireGuard configuration or a picture of its QR code first."
             return
         }
         stageImport(text: text, name: "Clipboard")
@@ -176,11 +193,24 @@ final class AppModel: ObservableObject {
     /// Reads dropped or chosen files (.conf, or a .zip such as the official app's export) and
     /// stages them for the import sheet. Nothing is saved until the user confirms there.
     func stageImport(_ urls: [URL]) {
+        Task { await stageImportAsync(urls) }
+    }
+
+    private func stageImportAsync(_ urls: [URL]) async {
+        guard pendingImport.isEmpty else { return busy() }
         var candidates: [ImportCandidate] = []
         for url in urls {
-            let accessing = url.startAccessingSecurityScopedResource()
-            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
             do {
+                if QRReader.isImage(url) {
+                    // Read while we have access; decoded off the main thread after.
+                    let data = try Self.withAccess(url) { try Self.readBounded(url, limit: QRReader.maxImageBytes) }
+                    let configs = try await QRReader.configurations(inImageData: data, source: url.lastPathComponent)
+                    candidates += Self.candidates(configs, base: TunnelName.from(fileName: url.deletingPathExtension().lastPathComponent),
+                                                  source: "QR code in \(url.lastPathComponent)")
+                    continue
+                }
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
                 if url.pathExtension.lowercased() == "zip" {
                     let data = try Self.readBounded(url, limit: ZipReader.maxArchiveBytes)
                     for entry in try ZipReader.confEntries(data) {
@@ -195,11 +225,39 @@ final class AppModel: ObservableObject {
                 candidates.append(ImportCandidate(name: TunnelName.from(fileName: url.lastPathComponent), text: "", source: url.lastPathComponent, readError: error.localizedDescription))
             }
         }
+        present(candidates)
+    }
+
+    func stageImport(text: String, name: String, source: String = "Clipboard") {
+        present([ImportCandidate(name: TunnelName.sanitize(name), text: text, source: source)])
+    }
+
+    /// Opens the import review, unless one is already open: a new import (a drop, ⇧⌘V, a file
+    /// another app opens in Wombat) must not change the list under review (security-5 L2/N4).
+    private func present(_ candidates: [ImportCandidate]) {
+        guard pendingImport.isEmpty else { return busy() }
         pendingImport = candidates
     }
 
-    func stageImport(text: String, name: String) {
-        pendingImport = [ImportCandidate(name: TunnelName.sanitize(name), text: text, source: "Clipboard")]
+    private func busy() {
+        actionError = "Finish or cancel the import that's open first."
+    }
+
+    /// Candidates for the configurations in one picture. Several codes in one picture could hide
+    /// a second, unexpected tunnel, so then none starts ticked (security-5 L4).
+    private static func candidates(_ configs: [String], base: String, source: String) -> [ImportCandidate] {
+        configs.enumerated().map { index, config in
+            var candidate = ImportCandidate(name: configs.count > 1 ? "\(base) \(index + 1)" : base, text: config,
+                                            source: configs.count > 1 ? "\(source), one of \(configs.count) QR codes" : source)
+            candidate.include = configs.count == 1
+            return candidate
+        }
+    }
+
+    private static func withAccess<T>(_ url: URL, _ body: () throws -> T) rethrows -> T {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        return try body()
     }
 }
 
@@ -332,6 +390,7 @@ struct AppCommands: Commands {
                 model.importFromClipboard()
             }
             .keyboardShortcut("v", modifiers: [.command, .shift])
+            Button("Scan QR Code…") { model.showingScanner = true }
             Button("New Tunnel…") { NotificationCenter.default.post(name: .newTunnel, object: nil) }
                 .keyboardShortcut("n")
             Divider()
@@ -386,8 +445,8 @@ enum ImportPanel {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.init(filenameExtension: "conf")!, .zip]
-        panel.message = "Choose WireGuard .conf files, or a zip of them (such as the official app's “Export Tunnels to Zip”)."
+        panel.allowedContentTypes = [.init(filenameExtension: "conf")!, .zip, .png, .jpeg, .heic, .heif, .tiff]
+        panel.message = "Choose WireGuard .conf files, a zip of them (such as the official app's “Export Tunnels to Zip”), or a picture of a QR code."
         if panel.runModal() == .OK { model.stageImport(panel.urls) }
     }
 }
