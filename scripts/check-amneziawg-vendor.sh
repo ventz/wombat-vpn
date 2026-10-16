@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Verifies Vendor/amneziawg-go against upstream: clones the pinned tag, checks it is the pinned
+# commit, and prints every difference from our copy. The output must be exactly the patches in
+# Vendor/amneziawg-go/WOMBAT.md (plus the trimmed go.mod/go.sum and our test file).
+#
+#   scripts/check-amneziawg-vendor.sh            # diff to stdout
+#   scripts/check-amneziawg-vendor.sh --stat     # files only
+#
+# The vendored tree has no checksum of its own (go.mod's replace points at a directory), so this
+# is how a reviewer confirms nothing else changed.
+set -euo pipefail
+trap 'echo "check-amneziawg-vendor: line $LINENO failed (exit $?): $BASH_COMMAND" >&2' ERR
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VENDOR="$ROOT/Vendor/amneziawg-go"
+TAG="v3.1.20260828"
+COMMIT="b5928efb6ca19f0153958460c3d141f04abc5c2e"
+
+mkdir -p "$ROOT/build"
+WORK="$(mktemp -d "$ROOT/build/awg-upstream.XXXXXX")"
+trap 'command rm -rf "$WORK"' EXIT
+
+git clone -q --depth 1 --branch "$TAG" https://github.com/amnezia-vpn/amneziawg-go "$WORK/upstream" 2>/dev/null
+actual="$(git -C "$WORK/upstream" rev-parse HEAD)"
+[[ "$actual" == "$COMMIT" ]] || { echo "check-amneziawg-vendor: $TAG is $actual, expected $COMMIT (tag moved?)" >&2; exit 1; }
+
+# The paths deliberately left out of the vendored copy (WOMBAT.md, "What was left out").
+excludes=(-x .git -x .github -x outline -x tests -x netstack -x Dockerfile -x Makefile
+          -x 'main.go' -x 'main_windows.go' -x format_test.go -x version.go)
+if [[ "${1:-}" == "--stat" ]]; then
+    diff -rq "${excludes[@]}" "$WORK/upstream" "$VENDOR" | sed "s|$WORK/upstream|upstream|; s|$VENDOR|vendored|" || true
+else
+    diff -ru "${excludes[@]}" "$WORK/upstream" "$VENDOR" | sed "s|$WORK/upstream|upstream|; s|$VENDOR|vendored|" || true
+fi

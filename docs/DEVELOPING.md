@@ -65,9 +65,10 @@ keychain items and settings, so it runs beside a release copy. System extensions
 from `/Applications`. To allow one: System Settings › General › Login Items & Extensions, scroll
 to Extensions, choose By Category, click ⓘ next to Network Extensions, turn the app on, Done.
 
-The tunnel target's pre-build step runs `scripts/build-wg-go.sh`, which builds wireguard-go as a
-universal static library (`build/wg-go/libwg-go.a`) against a copy of the Go runtime patched so
-timers count sleep. It skips the rebuild when nothing changed.
+The tunnel target's pre-build step runs `scripts/build-wg-go.sh`, which builds wireguard-go and
+the vendored amneziawg-go into one universal static library (`build/wg-go/libwg-go.a`) against a
+copy of the Go runtime patched so timers count sleep. It skips the rebuild when nothing changed.
+`scripts/check-amneziawg-vendor.sh` shows how `Vendor/amneziawg-go` differs from upstream.
 
 **Network Extension entitlement:** development profiles carry `packet-tunnel-provider`;
 Developer ID needs `packet-tunnel-provider-systemextension`. `project.yml` sets
@@ -131,6 +132,13 @@ scripts/dev/test-peer.sh down
 
 The generated config routes only `10.99.0.0/24`, so the rest of the Mac's traffic, and any other
 VPN, is untouched.
+
+`scripts/dev/test-peer.sh up --awg` starts an AmneziaWG peer instead, built from upstream
+amneziawg-go and amneziawg-tools (`scripts/dev/awg-peer`; the GPLv2 tools are only used inside
+the container), and writes `build/test-peer/wombat-awg.conf` with AmneziaWG 2.0 settings. Check
+it with `docker exec wombat-test-peer awg show`. To see the obfuscation on the wire, capture in
+the container with `tcpdump -i eth0 -x udp port 51820`: the handshake starts with the I1 packet
+and four junk packets, and no packet begins with WireGuard's `01 00 00 00` headers.
 
 ## Debugging
 

@@ -63,7 +63,7 @@ must be a non-empty dictionary", and other VPNs lose on-demand. The fix is
 
 | Command | Does |
 |---|---|
-| `wombat check <file>... [--strict] [--json]` | Lint wg-quick files: errors with line numbers, warnings, security review |
+| `wombat check <file>... [--strict] [--json]` | Lint wg-quick files (AmneziaWG 1.0 to 2.0 settings included): errors with line numbers, warnings, security review |
 | `wombat genkey` | New private key (like `wg genkey`) |
 | `wombat pubkey` | Public key for the private key on stdin (like `wg pubkey`) |
 | `wombat genpsk` | New preshared key (like `wg genpsk`) |
@@ -108,6 +108,7 @@ ISO 8601). For example, `wombat status --json`:
     "name" : "home",
     "onDemand" : false,
     "protection" : { "allowLAN" : true, "killSwitch" : false },
+    "protocol" : "wireguard",
     "status" : "connected"
   }
 ]

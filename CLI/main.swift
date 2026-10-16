@@ -39,7 +39,7 @@ Diagnostics:
   wombat doctor                        Check the install, extension, app and socket
 
 Offline tools (no app needed):
-  wombat check <file>... [--strict] [--json]   Lint wg-quick files; exit 1 on errors
+  wombat check <file>... [--strict] [--json]   Lint wg-quick and AmneziaWG files; exit 1 on errors
   wombat genkey | wombat pubkey | wombat genpsk Key tools, compatible with `wg`
   wombat completion zsh|bash                   Shell completion script
   wombat install-skill [--dir DIR]             Teach coding agents (Claude Code) to use wombat
@@ -226,6 +226,7 @@ func printTunnels(_ tunnels: [Control.TunnelSummary]) {
         if let since = t.connectedSince { line += dim("  since \(since.formatted(date: .omitted, time: .shortened))") }
         if t.onDemand { line += dim("  on-demand") }
         if t.protection?.killSwitch == true { line += dim("  kill-switch") }
+        if t.protocol == "amneziawg" { line += dim("  amneziawg") }
         if let e = t.endpoint { line += dim("  \(e)") }
         print(line)
     }
@@ -250,16 +251,19 @@ func cmdToggle(_ args: Args) throws {
 
 func cmdShow(_ args: Args) throws {
     var names = args.positional
+    let tunnels = try call(Control.Request(.status)).tunnels ?? []
     if names.isEmpty {
-        names = (try call(Control.Request(.status)).tunnels ?? []).filter { $0.status == "connected" }.map(\.name)
+        names = tunnels.filter { $0.status == "connected" }.map(\.name)
         if names.isEmpty { print("No connected tunnels."); return }
     }
+    let amnezia = Set(tunnels.filter { $0.protocol == "amneziawg" }.map(\.name))
     var all: [String: RuntimeStats] = [:]
     for name in names {
         let r = try call(Control.Request(.stats, name: name))
         guard let stats = r.stats else { continue }
         if args.json { all[name] = stats; continue }
         print("\(paint("tunnel", "32;1")): \(bold(safe(name)))")
+        if amnezia.contains(name) { print("  \(bold("protocol")): amneziawg") }
         if let port = stats.listenPort { print("  \(bold("listening port")): \(port)") }
         for p in stats.peers {
             print("")
@@ -397,6 +401,8 @@ func cmdCheck(_ args: Args) throws {
     struct FileReport: Encodable {
         let file: String
         let valid: Bool
+        /// "wireguard" or "amneziawg"; nil when the file doesn't parse.
+        var `protocol`: String?
         let diagnostics: [String]
         let findings: [Finding]
     }
@@ -413,13 +419,14 @@ func cmdCheck(_ args: Args) throws {
         let findings = result.configuration.map(ConfigReview.review) ?? []
         let valid = result.configuration != nil
         if !valid || (args.has("--strict") && findings.contains { $0.level == .risk }) { failed = true }
-        reports.append(FileReport(file: path, valid: valid, diagnostics: result.diagnostics.map(\.description), findings: findings))
+        reports.append(FileReport(file: path, valid: valid, protocol: result.configuration?.protocolName,
+                                  diagnostics: result.diagnostics.map(\.description), findings: findings))
     }
     if args.json {
         printJSON(reports)
     } else {
         for r in reports {
-            print("\(r.valid ? paint("✓", "32") : paint("✕", "31")) \(bold(r.file))")
+            print("\(r.valid ? paint("✓", "32") : paint("✕", "31")) \(bold(r.file))\(r.protocol == "amneziawg" ? dim("  amneziawg") : "")")
             for d in r.diagnostics { print("  \(d.hasPrefix("error") ? paint(d, "31") : paint(d, "33"))") }
             for f in r.findings {
                 let label = f.level == .risk ? paint("risk", "31") : f.level == .warning ? paint("warning", "33") : dim("info")
@@ -595,15 +602,15 @@ func cmdInstallSkill(_ args: Args) throws {
     let skill = """
     ---
     name: wombat
-    description: Control WireGuard tunnels on this Mac with the `wombat` CLI (Wombat app). Use when asked to connect/disconnect a VPN or WireGuard tunnel, check VPN status, inspect handshakes/transfer, lint a wg-quick .conf, generate WireGuard keys, or debug routing/DNS through a tunnel.
+    description: Control WireGuard and AmneziaWG tunnels on this Mac with the `wombat` CLI (Wombat app). Use when asked to connect/disconnect a VPN or WireGuard tunnel, check VPN status, inspect handshakes/transfer, lint a wg-quick .conf, generate WireGuard keys, or debug routing/DNS through a tunnel.
     ---
 
     # wombat CLI
 
-    - `wombat status --json`: tunnels with status (connected, disconnected, …), on-demand, kill switch.
+    - `wombat status --json`: tunnels with status (connected, disconnected, …), on-demand, kill switch, protocol (wireguard or amneziawg).
     - `wombat up <name>` / `wombat down [name]`: connect / disconnect (no name = all). Exit 0 on success.
     - `wombat show <name> --json`: peers, endpoints, latest handshake, rx/tx bytes.
-    - `wombat check <file> [--strict] [--json]`: lint wg-quick files offline; exit 1 on errors (and on risks with --strict).
+    - `wombat check <file> [--strict] [--json]`: lint wg-quick files offline (AmneziaWG 1.0-2.0 keys included); exit 1 on errors (and on risks with --strict).
     - `wombat genkey | tee priv | wombat pubkey`: key pair; `wombat genpsk` for a preshared key.
     - `wombat logs --last 10m` (or `-f`): app and tunnel logs. `wombat routes`, `wombat dns`, `wombat doctor` for debugging.
 

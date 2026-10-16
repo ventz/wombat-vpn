@@ -21,6 +21,9 @@ class PacketTunnelSettingsGenerator {
         self.resolvedEndpoints = resolvedEndpoints
     }
 
+    /// Wombat: whether this tunnel runs on the amneziawg-go engine.
+    var isAmnezia: Bool { !tunnelConfiguration.interface.amneziaSettings.isEmpty }
+
     func endpointUapiConfiguration() -> (String, [EndpointResolutionResult?]) {
         var resolutionResults = [EndpointResolutionResult?]()
         var wgSettings = ""
@@ -46,6 +49,10 @@ class PacketTunnelSettingsGenerator {
         wgSettings.append("private_key=\(tunnelConfiguration.interface.privateKey.hexKey)\n")
         if let listenPort = tunnelConfiguration.interface.listenPort {
             wgSettings.append("listen_port=\(listenPort)\n")
+        }
+        // Wombat: AmneziaWG device keys, understood only by amneziawg-go (awgTurnOn).
+        for setting in tunnelConfiguration.interface.amneziaSettings {
+            wgSettings.append("\(setting.key)=\(setting.value)\n")
         }
         if !tunnelConfiguration.peers.isEmpty {
             wgSettings.append("replace_peers=true\n")
@@ -105,7 +112,9 @@ class PacketTunnelSettingsGenerator {
             #if os(iOS)
             networkSettings.mtu = NSNumber(value: 1280)
             #elseif os(macOS)
-            networkSettings.tunnelOverheadBytes = 80
+            // Wombat: AmneziaWG's S4 pads every data packet, on top of WireGuard's 80 bytes.
+            let s4 = tunnelConfiguration.interface.amneziaSettings.first { $0.key == "s4" }.flatMap { Int($0.value) } ?? 0
+            networkSettings.tunnelOverheadBytes = NSNumber(value: 80 + s4)
             #else
             #error("Unimplemented")
             #endif

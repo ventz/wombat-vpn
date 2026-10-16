@@ -11,4 +11,7 @@ reproduces it, **with real keys removed**.
 
 Especially interesting: anything that leaks a private key, sends traffic or DNS outside a tunnel
 that should carry it, lets the CLI or another process change tunnels without approval, or lets a
-config or zip file crash or hang the app or extension.
+config, zip file or network packet crash or hang the app or extension (either engine:
+wireguard-go, or amneziawg-go for AmneziaWG tunnels). Bugs that are amneziawg-go's own are worth
+reporting upstream too; Wombat's changes to it are in
+[Vendor/amneziawg-go/WOMBAT.md](Vendor/amneziawg-go/WOMBAT.md).

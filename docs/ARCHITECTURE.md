@@ -20,7 +20,7 @@ flowchart LR
     App["Wombat.app<br/>SwiftUI, sandboxed"] -- "XPC (NEMachServiceName)<br/>code signature both ways" --> Ext
     App -- "NETunnelProviderManager" --> NE["macOS Network Extension<br/>(nesessionmanager)"]
     NE -- "starts / stops" --> Ext["Tunnel system extension<br/>root, sandboxed"]
-    Ext --> Engine["WireGuardKit + wireguard-go<br/>utun"]
+    Ext --> Engine["WireGuardKit + wireguard-go<br/>or amneziawg-go, utun"]
 ```
 
 | Part | Runs as | Holds |
@@ -29,6 +29,11 @@ flowchart LR
 | `Tunnel/` (system extension) | root, App Sandbox | the packet tunnel, its own root-only copy of each config |
 | `CLI/` (`wombat`) | you | nothing; asks the app, or works offline (`check`, `genkey`) |
 | `Packages/TunnelCore` | (library) | wg-quick parser, validation, review, stats, the CLI protocol |
+
+One Go library (`libwg-go.a`) holds two engines: upstream wireguard-go for WireGuard tunnels and
+a vendored amneziawg-go for tunnels with active AmneziaWG settings (`awgTurnOn`). The choice is
+made per tunnel from its config, so plain WireGuard never runs the fork's code. Both share one
+handle table and one patched Go runtime.
 
 The extension is a **system extension** because Network Extension providers distributed outside
 the Mac App Store must be. It activates only from `/Applications` and needs the user's approval
@@ -152,14 +157,38 @@ Config files, zips and CLI requests can come from anyone:
   thousands of peers can't stall the app.
 - Tunnel names are stripped of control and bidi characters before they reach menus or the
   terminal.
+- AmneziaWG settings (`TunnelCore/Amnezia.swift`) are checked against Wombat's own limits,
+  stricter than the engine's: at most 128 junk packets of at most 1500 bytes, paddings that keep
+  each handshake message within 1280 bytes, non-overlapping header values, and signature packets
+  of at most 4096 bytes in the documented tags only. Summed over all peers, one round of
+  handshakes may send at most 1 MB or 1024 junk and signature packets. S1-S3 can make a cookie
+  reply or handshake response larger than the packet that triggers it, which a spoofed source
+  address could turn into an amplifier: review warns, and the engine caps such replies at 20 a
+  second. AmneziaWG 1.5 and 3.x keys are refused by
+  name; some of them change how long session keys live. The engine bounds the same values
+  again in case anything reaches it unchecked.
+- The AmneziaWG values identify a server to a censor, so they're never logged and never leave
+  the extension in the stats it returns to the app. Even which protocol a tunnel uses is logged
+  as private data. They stay in the config itself: `wombat export` without `--with-keys` still
+  includes them, because the export belongs to the tunnel's owner and re-importing needs them.
+- Signature packets (I1-I5) are bytes the file chooses, sent to the endpoint the file names
+  before every handshake. Review flags them, and so does the import approval.
 
 ## Changes to the vendored engine
 
 `Vendor/WireGuardKit` is WireGuardKit from wireguard-apple (MIT), with wireguard-go bumped to
-0.0.20250522 and current `golang.org/x` modules. Every change is marked "Wombat" in the source:
+commit `2631ce9` (2026-10-06, after 0.0.20250522) and current `golang.org/x` modules. Every
+change is marked "Wombat" in the source:
 
 - `api-apple.go`: a bounds-safe SIGUSR2 stack dump, a buffered signal channel, a lock around
-  the handle table, and closing the device (not just the fd) when setup or `Up()` fails.
+  the handle table, and closing the device (not just the fd) when setup or `Up()` fails. It also
+  adds `awgTurnOn` for the AmneziaWG engine, and tags every log line with its tunnel's token so
+  one tunnel's engine log never shows in another's (one extension serves every user's tunnels).
+  Both engines write to the TUN through a guard that drops packets with no bytes: wireguard-go
+  (used unmodified) can produce one from an authenticated IPv6 packet whose length field wraps,
+  and the macOS TUN write would panic on it.
+- `WireGuardAdapter.swift` / `InterfaceConfiguration.swift`: AmneziaWG settings select
+  `awgTurnOn`; an update that would switch protocols on a running engine is refused.
 - `WireGuardAdapter.swift`: fail closed when network settings time out.
 - `PacketTunnelSettingsGenerator.swift` / `TunnelConfiguration.swift`: the address-family block
   described above.
@@ -167,3 +196,8 @@ Config files, zips and CLI requests can come from anyone:
 - `scripts/build-wg-go.sh` builds against a private copy of the Go runtime patched to
   `mach_continuous_time`, so WireGuard's timers count time the Mac spends asleep. The official
   app does the same; the script fails if the patch stops applying.
+
+`Vendor/amneziawg-go` is amneziawg-go v3.1.20260828 (MIT), trimmed to the packages Wombat links.
+Its nine patches (crash, race and bounds fixes, three of them from open upstream pull requests,
+and a cap on amplifying replies) are described in its
+[WOMBAT.md](../Vendor/amneziawg-go/WOMBAT.md).

@@ -20,7 +20,7 @@ set -euo pipefail
 trap 'echo "build-signed.sh: line $LINENO failed (exit $?): $BASH_COMMAND" >&2' ERR
 
 readonly IDENTITY="${WOMBAT_SIGNING_IDENTITY:-Developer ID Application: Ventzislav Petkov (8J9W3ZG4ZN)}"
-readonly NOTARY_PROFILE="${WOMBAT_NOTARY_PROFILE:-moo-notary}"
+readonly NOTARY_PROFILE="${WOMBAT_NOTARY_PROFILE:-ventz-notary}"
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"

@@ -11,6 +11,8 @@ trap 'echo "build-wg-go: line $LINENO failed (exit $?): $BASH_COMMAND" >&2' ERR
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/Vendor/WireGuardKit/Sources/WireGuardKitGo"
+# The AmneziaWG engine, linked into the same archive (go.mod replace; see its WOMBAT.md).
+AWG="$ROOT/Vendor/amneziawg-go"
 OUT="$ROOT/build/wg-go"
 WORK="$OUT/work"
 ARCHS="${ARCHS:-arm64 x86_64}"
@@ -32,7 +34,9 @@ STAMP="$OUT/.stamp"
 
 # Skip the rebuild when nothing that feeds the archive changed.
 inputs_hash() {
-    { echo "$GO_VERSION $ARCHS $MACOS_MIN"; cat "$SRC"/*.go "$SRC/go.mod" "$SRC/go.sum" "$0"; } | shasum -a 256 | cut -d' ' -f1
+    { echo "$GO_VERSION $ARCHS $MACOS_MIN"; cat "$SRC"/*.go "$SRC/go.mod" "$SRC/go.sum" "$0"
+      find "$AWG" -type f \( -name '*.go' -o -name go.mod -o -name go.sum \) ! -name '*_test.go' | LC_ALL=C sort | xargs cat; } \
+        | shasum -a 256 | cut -d' ' -f1
 }
 HASH="$(inputs_hash)"
 if [[ -f "$OUT/libwg-go.a" && -f "$STAMP" && "$(cat "$STAMP")" == "$HASH" ]]; then

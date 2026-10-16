@@ -99,6 +99,7 @@ private struct CandidateRow: View {
                 ErrorLabel(error)
             } else if let config {
                 Group {
+                    if config.isAmnezia { Text("Protocol: AmneziaWG (needs an AmneziaWG server)") }
                     Text("Endpoint: \(config.peers.compactMap { $0.endpoint?.description }.joined(separator: ", ").ifEmpty("none"))")
                     Text("Routes: \(config.isFullTunnel ? "\(RouteCoverage.describe(config.coverage.ipv4)) of IPv4, \(RouteCoverage.describe(config.coverage.ipv6)) of IPv6" : config.peers.flatMap(\.allowedIPs).prefix(8).map(\.description).joined(separator: ", ").ifEmpty("none"))")
                 }

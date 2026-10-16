@@ -63,7 +63,7 @@ public enum WgQuick {
         var ignored: [IgnoredKey] = []
 
         let multiKeys: Set<String> = ["address", "dns", "allowedips"]
-        let interfaceKeys: Set<String> = ["privatekey", "address", "dns", "listenport", "mtu"]
+        let interfaceKeys: Set<String> = Set(["privatekey", "address", "dns", "listenport", "mtu"]).union(AmneziaParameters.keys)
         let peerKeys: Set<String> = ["publickey", "presharedkey", "allowedips", "endpoint", "persistentkeepalive"]
 
         // A UTF-8 byte order mark (Windows editors add one) is not part of the first line.
@@ -94,6 +94,9 @@ public enum WgQuick {
                     section = .peer
                     if peers.count >= maxPeers { error(lineNumber, "More than \(maxPeers) peers"); return ParseResult(configuration: nil, diagnostics: diagnostics) }
                     peers.append(Pending(line: lineNumber))
+                case "[device]":
+                    error(lineNumber, "[Device] is an AmneziaWG 3 section, which this app doesn't support yet")
+                    section = .none
                 default:
                     error(lineNumber, "Unknown section \(trimmed)")
                     section = .none
@@ -115,6 +118,10 @@ public enum WgQuick {
             case .interface:
                 if ignoredInterfaceKeys.contains(lowered) {
                     ignored.append(IgnoredKey(key: key, value: value, line: lineNumber))
+                    continue
+                }
+                if AmneziaParameters.unsupportedKeys.contains(lowered) {
+                    error(lineNumber, "\(key) is an AmneziaWG setting this app doesn't support yet (it supports AmneziaWG 1.0 to 2.0)")
                     continue
                 }
                 guard interfaceKeys.contains(lowered) else { error(lineNumber, "Unknown key \"\(key)\" in [Interface]"); continue }
@@ -226,6 +233,8 @@ public enum WgQuick {
             peerConfigs.append(p)
         }
 
+        let amnezia = AmneziaParameters.parse(iface.values, mtu: mtu, peers: max(peerConfigs.count, 1), error: error, warning: warning)
+
         if let mtu, mtu < 1280, addresses.contains(where: { $0.family == .v6 }) {
             warning(iface.values["mtu"]?.line, "MTU \(mtu) is below 1280, the minimum for IPv6: IPv6 traffic will fail")
         }
@@ -247,6 +256,7 @@ public enum WgQuick {
         config.listenPort = listenPort
         config.mtu = mtu
         config.ignored = ignored
+        config.amnezia = amnezia
         return ParseResult(configuration: TunnelConfiguration(interface: config, peers: peerConfigs), diagnostics: diagnostics)
     }
 
@@ -259,6 +269,7 @@ public enum WgQuick {
         if !dns.isEmpty { out += "DNS = \(dns.joined(separator: ", "))\n" }
         if let port = c.interface.listenPort { out += "ListenPort = \(port)\n" }
         if let mtu = c.interface.mtu { out += "MTU = \(mtu)\n" }
+        for line in c.interface.amnezia?.configLines ?? [] { out += line + "\n" }
         for peer in c.peers {
             out += "\n[Peer]\nPublicKey = \(peer.publicKey.base64)\n"
             if let psk = peer.presharedKey { out += "PresharedKey = \(includePrivateKey ? psk.base64 : "(hidden)")\n" }

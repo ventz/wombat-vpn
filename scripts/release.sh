@@ -11,7 +11,7 @@
 #
 # Requires, one time each (see docs/DEVELOPING.md):
 #   - Xcode signed in to the team, the Developer ID Application certificate (scripts/build-signed.sh)
-#   - the notarytool profile (WOMBAT_NOTARY_PROFILE, default moo-notary)
+#   - the notarytool profile (WOMBAT_NOTARY_PROFILE, default ventz-notary)
 #   - Wombat's Sparkle EdDSA key in the login keychain, account "wombat"
 #     (generate_keys --account wombat); never Moo's or Tardy's
 #   - ~/.config/cloudflare/.env with CLOUDFLARE_ADMIN_TOKEN (loaded only for wrangler)
@@ -24,7 +24,7 @@ set -euo pipefail
 trap 'echo "release.sh: line $LINENO failed (exit $?): $BASH_COMMAND" >&2' ERR
 
 readonly IDENTITY="${WOMBAT_SIGNING_IDENTITY:-Developer ID Application: Ventzislav Petkov (8J9W3ZG4ZN)}"
-readonly NOTARY_PROFILE="${WOMBAT_NOTARY_PROFILE:-moo-notary}"
+readonly NOTARY_PROFILE="${WOMBAT_NOTARY_PROFILE:-ventz-notary}"
 readonly BUCKET="${WOMBAT_BUCKET:-wombat-mac-wireguard-autoupdate}"
 readonly FEED_HOST="${WOMBAT_FEED_HOST:-https://wombat.vpetkov.net}"
 readonly SPARKLE_ACCOUNT="wombat"

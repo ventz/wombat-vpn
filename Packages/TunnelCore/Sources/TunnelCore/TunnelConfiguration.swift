@@ -14,6 +14,13 @@ public struct TunnelConfiguration: Equatable, Sendable {
 
     /// Routes most of IPv4 or IPv6 (not just a literal /0: 0.0.0.0/1 + 128.0.0.0/1 counts too).
     public var isFullTunnel: Bool { coverage.isFullTunnel }
+
+    /// Speaks AmneziaWG rather than WireGuard: runs on the amneziawg-go engine and needs an
+    /// AmneziaWG peer. All-default AmneziaWG settings are plain WireGuard.
+    public var isAmnezia: Bool { interface.amnezia?.isActive ?? false }
+
+    /// The protocol's name for the CLI's JSON: "wireguard" or "amneziawg".
+    public var protocolName: String { isAmnezia ? "amneziawg" : "wireguard" }
 }
 
 public struct InterfaceConfiguration: Equatable, Sendable {
@@ -27,6 +34,8 @@ public struct InterfaceConfiguration: Equatable, Sendable {
     public var mtu: UInt16?
     /// wg-quick keys this app parses but never acts on (PostUp, Table, …), kept for warnings and round-trips.
     public var ignored: [IgnoredKey] = []
+    /// AmneziaWG settings, nil when the file has none. See `isAmnezia` for whether they matter.
+    public var amnezia: AmneziaParameters?
 
     public init(privateKey: WireGuardKey) { self.privateKey = privateKey }
 

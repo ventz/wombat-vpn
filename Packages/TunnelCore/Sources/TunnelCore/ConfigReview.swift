@@ -93,6 +93,28 @@ public enum ConfigReview {
         for p in c.peers where p.allowedIPs.isEmpty {
             add(.warning, "no-allowed-ips", "Peer \(p.publicKey.abbreviated) has no AllowedIPs, so no traffic is routed to it")
         }
+        if c.isAmnezia, let amnezia = c.interface.amnezia {
+            add(.info, "amneziawg", "Speaks AmneziaWG, so it only connects to an AmneziaWG server")
+            let signatures = amnezia.signaturePackets.compactMap { $0 }.count
+            if signatures > 0 {
+                // The file decides these bytes, and they go to whatever endpoint it names, LAN
+                // devices included (audit S4-L4).
+                add(.warning, "amneziawg-signature-packets",
+                    "Sends \(signatures) packet\(signatures == 1 ? "" : "s") of bytes chosen by this file (I1-I5) to the endpoint before each handshake")
+            }
+            // A cookie reply larger than the initiation that triggers it lets anyone who knows
+            // this tunnel's public key bounce more traffic at a spoofed address while the
+            // tunnel is under load (audit S4 M2). A warning: real servers may need it.
+            // Either handshake message can trigger a cookie reply (S4b M1), and an initiation
+            // triggers a response (S4c L2). The engine caps replies larger than their
+            // trigger at 20 a second (amneziawg-go patch 9); this tells the user why.
+            let s = amnezia.paddings.map { Int($0 ?? 0) }
+            let initiation = s[0] + 148, response = s[1] + 92, cookie = s[2] + 64
+            if cookie > min(initiation, response) || response > initiation {
+                add(.warning, "amneziawg-amplification",
+                    "S1-S3 make some replies larger than their trigger, a possible traffic amplifier (capped at 20/s); keep S2 ≤ S1 + 56 and S3 ≤ S2 + 28")
+            }
+        }
         for item in c.interface.ignored where ["preup", "postup", "predown", "postdown"].contains(item.key.lowercased()) {
             add(.risk, "script-hook", "\(item.key) asks to run a shell command; it is ignored")
         }

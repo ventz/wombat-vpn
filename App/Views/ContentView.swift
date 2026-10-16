@@ -251,7 +251,8 @@ struct SidebarRow: View {
             return "Connected · " + since.formatted(.relative(presentation: .named))
         }
         if tunnel.isOnDemand && tunnel.status == .disconnected { return "On demand" }
-        return tunnel.configuration?.peers.first?.endpoint?.hostString ?? tunnel.statusText
+        let detail = tunnel.configuration?.peers.first?.endpoint?.hostString ?? tunnel.statusText
+        return tunnel.configuration?.isAmnezia == true ? "AmneziaWG · \(detail)" : detail
     }
 }
 

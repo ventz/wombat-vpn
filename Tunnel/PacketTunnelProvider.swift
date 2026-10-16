@@ -85,10 +85,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             let addresses = EndpointAddresses.resolve(tunnelID: id, hosts: hosts, options: options, killSwitch: killSwitch)
             configuration = try ConfigBridge.wireGuardKit(core, name: protocolConfiguration.serverAddress, addresses: addresses.chosen)
             pending = (id, hosts, addresses.pending)
+            // The engine only, never the settings: they identify the server to a censor. Private,
+            // since using AmneziaWG at all can be sensitive for whoever reads a sysdiagnose (S4-L2).
+            log.notice("Protocol: \(core.isAmnezia ? "AmneziaWG (amneziawg-go \(WireGuardAdapter.amneziaBackendVersion)+wombat)" : "WireGuard (wireguard-go \(WireGuardAdapter.backendVersion))", privacy: .private)")
             // Counts only (no names or addresses): shows whether the app's lookups arrived.
             log.notice("Endpoints: \(hosts.count, privacy: .public) hostname(s), \(addresses.pending.count, privacy: .public) looked up by the app, \(addresses.chosen.count, privacy: .public) in use")
         } catch {
-            log.error("Cannot start: \(error.localizedDescription, privacy: .public)")
+            // Private: parser messages can quote config values (endpoints, AmneziaWG numbers).
+            // The app's Log tab still shows it in full (recentLog).
+            log.error("Cannot start: \(error.localizedDescription, privacy: .private)")
             self.recentLog.append("Cannot start: \(error.localizedDescription)")
             completionHandler(error)
             return

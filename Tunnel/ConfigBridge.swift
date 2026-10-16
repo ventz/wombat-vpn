@@ -23,6 +23,15 @@ enum ConfigBridge {
         interface.dnsSearch = c.interface.dnsSearchDomains
         interface.listenPort = c.interface.listenPort
         interface.mtu = c.interface.mtu
+        // All-default AmneziaWG settings are plain WireGuard and stay on wireguard-go.
+        if c.isAmnezia, let amnezia = c.interface.amnezia {
+            interface.amneziaSettings = try amnezia.uapiPairs.map { pair in
+                guard let setting = AmneziaSetting(key: pair.key, value: pair.value) else {
+                    throw ConversionError(errorDescription: "AmneziaWG setting \(pair.key)")
+                }
+                return setting
+            }
+        }
 
         let peers: [PeerConfiguration] = try c.peers.map { p in
             guard let publicKey = PublicKey(rawValue: p.publicKey.rawValue) else {

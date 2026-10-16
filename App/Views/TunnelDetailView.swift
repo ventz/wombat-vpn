@@ -56,6 +56,12 @@ struct DetailHeader: View {
                         Text("·")
                         Label("On demand", systemImage: "bolt.horizontal.circle").labelStyle(.titleAndIcon)
                     }
+                    if tunnel.configuration?.isAmnezia == true {
+                        Text("·")
+                        Label("AmneziaWG", systemImage: "theatermasks")
+                            .labelStyle(.titleAndIcon)
+                            .help("Speaks AmneziaWG, which disguises WireGuard traffic. It needs an AmneziaWG server.")
+                    }
                 }
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -275,6 +281,11 @@ struct InterfaceCard: View {
             }
             if let mtu = config.interface.mtu {
                 InfoRow(label: "MTU", value: "\(mtu)", monospaced: true)
+            }
+            if config.isAmnezia, let amnezia = config.interface.amnezia {
+                InfoRow(label: "Protocol", value: "AmneziaWG (\(AmneziaSummary.text(amnezia)))")
+            } else {
+                InfoRow(label: "Protocol", value: "WireGuard")
             }
         }
     }

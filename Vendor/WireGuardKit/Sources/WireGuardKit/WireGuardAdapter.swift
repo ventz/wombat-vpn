@@ -3,6 +3,7 @@
 
 import Foundation
 import NetworkExtension
+import os
 
 #if SWIFT_PACKAGE
 import WireGuardKitGo
@@ -49,6 +50,9 @@ public class WireGuardAdapter {
 
     /// Log handler closure.
     private let logHandler: LogHandler
+
+    /// Wombat: tags this adapter's engine log lines (see LogSink).
+    private var logToken: Int64 = 0
 
     /// Private queue used to synchronize access to `WireGuardAdapter` members.
     private let workQueue = DispatchQueue(label: "WireGuardAdapterWorkQueue")
@@ -114,6 +118,14 @@ public class WireGuardAdapter {
         return str
     }
 
+    /// Wombat: the amneziawg-go engine's version.
+    class var amneziaBackendVersion: String {
+        guard let ver = awgVersion() else { return "unknown" }
+        let str = String(cString: ver)
+        free(UnsafeMutableRawPointer(mutating: ver))
+        return str
+    }
+
     /// Returns the tunnel device interface name, or nil on error.
     /// - Returns: String.
     public var interfaceName: String? {
@@ -150,14 +162,14 @@ public class WireGuardAdapter {
         self.packetTunnelProvider = packetTunnelProvider
         self.logHandler = logHandler
 
-        setupLogHandler()
+        logToken = Self.logSink.register(logHandler)
     }
 
     deinit {
-        // Wombat: the Go logger is process-wide and never points at an adapter (see
-        // setupLogHandler), so there is nothing to clear here; clearing it used to switch off a
-        // newer tunnel's logging. Only this adapter's own handler is unregistered.
-        Self.logSink.unregister(self)
+        // Wombat: the Go logger is process-wide and never points at an adapter (see LogSink), so
+        // there is nothing to clear here; clearing it used to switch off a newer tunnel's
+        // logging. Only this adapter's token is unregistered, last, so the turn-off's own lines
+        // still reach this tunnel's log (the handler holds no reference to the adapter).
         if let fd = claimedDescriptor {
             Self.claimLock.lock()
             Self.claimedDescriptors.remove(fd)
@@ -171,6 +183,7 @@ public class WireGuardAdapter {
         if case .started(let handle, _) = self.state {
             wgTurnOff(handle)
         }
+        Self.logSink.unregister(logToken)
     }
 
     // MARK: - Public methods
@@ -218,7 +231,7 @@ public class WireGuardAdapter {
                 self.logEndpointResolutionResults(resolutionResults)
 
                 self.state = .started(
-                    try self.startWireGuardBackend(wgConfig: wgConfig),
+                    try self.startWireGuardBackend(wgConfig: wgConfig, amnezia: settingsGenerator.isAmnezia),
                     settingsGenerator
                 )
                 self.networkMonitor = networkMonitor
@@ -276,6 +289,20 @@ public class WireGuardAdapter {
                 self.packetTunnelProvider?.reasserting = false
             }
 
+            // Wombat: AmneziaWG tunnels are never updated in place: a running engine can't switch
+            // protocols, and amneziawg-go keeps any setting a new config leaves out (and its
+            // I-packet chain isn't swapped atomically). Restart instead. Nothing calls this on
+            // macOS today.
+            let running: PacketTunnelSettingsGenerator?
+            switch self.state {
+            case .started(_, let generator), .temporaryShutdown(let generator): running = generator
+            case .stopped: running = nil
+            }
+            if running?.isAmnezia == true || !tunnelConfiguration.interface.amneziaSettings.isEmpty {
+                completionHandler(.invalidState)
+                return
+            }
+
             do {
                 let settingsGenerator = try self.makeSettingsGenerator(with: tunnelConfiguration)
                 try self.setNetworkSettings(settingsGenerator.generateNetworkSettings())
@@ -310,47 +337,58 @@ public class WireGuardAdapter {
 
     // MARK: - Private methods
 
-    /// Setup WireGuard log handler.
-    private func setupLogHandler() {
-        Self.logSink.register(self)
-    }
-
     /// Wombat: wireguard-go keeps one global logger callback and context, read by its goroutines
     /// without synchronization. Upstream pointed the context at an unretained adapter and reset it
     /// per adapter, so a log line racing a deinit could call into freed memory in the root
-    /// extension (audits WOM-03, S2-L4). Here the Go side is set exactly once, with no context,
-    /// and lines go to the newest live adapter's handler under a lock.
+    /// extension (audits WOM-03, S2-L4). Here the Go side is set exactly once, with no context.
+    /// Each adapter gets a token that its engine tags every line with, and lines go only to that
+    /// adapter's handler: one extension process serves every tunnel, possibly of several macOS
+    /// users, and sending lines to the newest adapter mixed one tunnel's log into another's
+    /// (audit S4-L3). Lines with no tunnel (token 0, a SIGUSR2 stack dump) go to the system log.
     private static let logSink = LogSink()
 
     private final class LogSink: @unchecked Sendable {
+        // Handlers, not adapters: emit must never retain an adapter under the lock, because
+        // releasing the last reference there would run deinit, whose unregister takes the same
+        // lock (deadlock; audit S4b M2). Tokens are 64-bit and never reused, so a late
+        // line from a closed engine can't reach a newer tunnel's log (S4b/S4c L4/L3).
         private let lock = NSLock()
-        private weak var current: WireGuardAdapter?
+        private var handlers: [Int64: LogHandler] = [:]
+        private var nextToken: Int64 = 1
         private var installed = false
 
-        func register(_ adapter: WireGuardAdapter) {
+        func register(_ handler: @escaping LogHandler) -> Int64 {
             lock.lock()
-            current = adapter
+            let token = nextToken
+            nextToken += 1
+            handlers[token] = handler
             let install = !installed
             installed = true
             lock.unlock()
-            guard install else { return }
-            wgSetLogger(nil) { _, logLevel, message in
-                guard let message = message else { return }
-                let line = String(cString: message).trimmingCharacters(in: .newlines)
-                WireGuardAdapter.logSink.emit(WireGuardLogLevel(rawValue: logLevel) ?? .verbose, line)
+            if install {
+                wgSetLogger(nil) { _, token, logLevel, message in
+                    guard let message = message else { return }
+                    let line = String(cString: message).trimmingCharacters(in: .newlines)
+                    WireGuardAdapter.logSink.emit(token, WireGuardLogLevel(rawValue: logLevel) ?? .verbose, line)
+                }
             }
+            return token
         }
 
-        func unregister(_ adapter: WireGuardAdapter) {
+        func unregister(_ token: Int64) {
             lock.lock(); defer { lock.unlock() }
-            if current === adapter || current == nil { current = nil }
+            handlers[token] = nil
         }
 
-        func emit(_ level: WireGuardLogLevel, _ line: String) {
+        func emit(_ token: Int64, _ level: WireGuardLogLevel, _ line: String) {
             lock.lock()
-            let handler = current?.logHandler
+            let handler = handlers[token]
             lock.unlock()
-            handler?(level, line)
+            if let handler {
+                handler(level, line)
+            } else if token == 0 {
+                os_log("%{public}s", log: .default, type: .debug, line)
+            }
         }
     }
 
@@ -430,12 +468,15 @@ public class WireGuardAdapter {
     /// - Parameter wgConfig: WireGuard configuration
     /// - Throws: an error of type `WireGuardAdapterError`
     /// - Returns: tunnel handle
-    private func startWireGuardBackend(wgConfig: String) throws -> Int32 {
+    private func startWireGuardBackend(wgConfig: String, amnezia: Bool) throws -> Int32 {
         guard let tunnelFileDescriptor = self.tunnelFileDescriptor else {
             throw WireGuardAdapterError.cannotLocateTunnelFileDescriptor
         }
 
-        let handle = wgTurnOn(wgConfig, tunnelFileDescriptor)
+        // Wombat: AmneziaWG tunnels run on amneziawg-go; every other call takes either handle.
+        let handle = amnezia
+            ? awgTurnOn(wgConfig, tunnelFileDescriptor, logToken)
+            : wgTurnOn(wgConfig, tunnelFileDescriptor, logToken)
         if handle < 0 {
             throw WireGuardAdapterError.startWireGuardBackend(handle)
         }
@@ -511,7 +552,7 @@ public class WireGuardAdapter {
                 self.logEndpointResolutionResults(resolutionResults)
 
                 self.state = .started(
-                    try self.startWireGuardBackend(wgConfig: wgConfig),
+                    try self.startWireGuardBackend(wgConfig: wgConfig, amnezia: settingsGenerator.isAmnezia),
                     settingsGenerator
                 )
             } catch {

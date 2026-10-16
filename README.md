@@ -53,7 +53,9 @@ Wombat is a modern replacement that feels like part of macOS:
   drive it.
 
 Wombat speaks standard wg-quick `.conf` files and imports the official app's
-**Export Tunnels to Zip** archive directly, so switching takes a minute.
+**Export Tunnels to Zip** archive directly, so switching takes a minute. It also speaks
+[AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go), the WireGuard variant that disguises
+its traffic from deep packet inspection, so exports from the AmneziaWG app import too.
 
 ## Quick Install
 
@@ -80,6 +82,9 @@ scripts/build-signed.sh --install
 
 - **Import anything:** drag in `.conf` files, a zip of them, or paste from the clipboard. Every
   import shows where traffic will go and what's risky before anything is saved.
+- **AmneziaWG:** configs with AmneziaWG 1.0 to 2.0 settings (`Jc`, `S1`-`S4`, `H1`-`H4`,
+  `I1`-`I5`) run on amneziawg-go and connect to AmneziaWG servers. Plain WireGuard tunnels keep
+  running upstream wireguard-go; the two engines share one app.
 - **Live status:** per-peer handshakes, endpoints and transfer in the window; transfer and the
   latest handshake in the menu bar.
 - **Config review:** flags DNS leaks, IPv4/IPv6 leaks, overlapping AllowedIPs, DNS servers
@@ -123,6 +128,8 @@ Security is the first design goal, ahead of speed and convenience.
   receives its own copy over a code-signed XPC connection and stores it where only root can
   read it. Nothing secret goes into macOS's VPN preferences file, which every user can read.
 - **Configs can't run code.** `PostUp`, `PreDown` and friends are parsed, flagged and ignored.
+  AmneziaWG settings are checked against Wombat's own limits, so a downloaded file can't make
+  the tunnel send oversized or endless junk before each handshake.
 - **The CLI can't silently weaken you.** Importing, deleting, renaming, switching away from a
   protected tunnel, turning off on-demand or the kill switch, and exporting keys all need your
   approval (or Touch ID) in the app.
@@ -154,6 +161,9 @@ project with no promise of support.
 
 - The tunnel engine is [wireguard-go](https://git.zx2c4.com/wireguard-go) and WireGuardKit from
   [wireguard-apple](https://git.zx2c4.com/wireguard-apple), both MIT, © WireGuard LLC.
+- AmneziaWG tunnels run on [amneziawg-go](https://github.com/amnezia-vpn/amneziawg-go), MIT
+  (license © WireGuard LLC); Wombat's changes to it are listed in
+  [Vendor/amneziawg-go/WOMBAT.md](Vendor/amneziawg-go/WOMBAT.md).
 
 “WireGuard” and the “WireGuard” logo are registered trademarks of Jason A. Donenfeld. Wombat is
 not affiliated with or endorsed by the WireGuard project. See [wireguard.com](https://www.wireguard.com/).

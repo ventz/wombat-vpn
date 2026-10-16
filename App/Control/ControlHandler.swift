@@ -224,6 +224,7 @@ final class ControlHandler {
             connectedSince: t.connectedSince)
         s.onDemandRules = Control.OnDemand(manager: t.manager)
         s.protection = Control.Protection(proto: t.proto)
+        s.protocol = t.configuration?.protocolName
         return s
     }
 
@@ -231,26 +232,53 @@ final class ControlHandler {
     /// routes 0.0.0.0/0 to a stranger's server sees all traffic. So the user approves each one,
     /// seeing where the traffic would go.
     private func approveImport(name: String, config: TunnelConfiguration, findings: [Finding]) -> Bool {
-        var lines = ["The wombat command wants to add a tunnel with \(config.peers.count) peer\(config.peers.count == 1 ? "" : "s").", ""]
+        var lines = ["The wombat command wants to add \(config.isAmnezia ? "an AmneziaWG" : "a") tunnel with \(config.peers.count) peer\(config.peers.count == 1 ? "" : "s").", ""]
         // Where most traffic would go comes first, naming every peer that carries a default
         // route, so a long peer list can't hide one (audit WOM-13).
-        let heavy = config.peers.filter { RouteCoverage($0.allowedIPs).isFullTunnel }
+        // Lists are capped and long hostnames shortened, so what follows always fits in the
+        // alert's 1500 characters (S4b L1).
+        // Long names keep their end (domain and port), where a lookalike would differ.
+        func list(_ items: [String]) -> String {
+            let shown = items.prefix(6).map { $0.count > 48 ? "…" + $0.suffix(47) : $0 }
+            return shown.joined(separator: ", ") + (items.count > 6 ? " (+\(items.count - 6) more)" : "")
+        }
+        // The peers that actually receive most of the internet, computed the way WireGuard
+        // routes (longest prefix; an identical prefix goes to the later peer). A peer whose
+        // routes are all shadowed gets nothing and isn't named (S4c L1, S4d/S4e L1).
+        let heavy = config.internetPeers
         if !heavy.isEmpty {
-            lines.append("All traffic goes to: \(heavy.map { $0.endpoint?.description ?? "a peer with no endpoint" }.joined(separator: ", "))")
+            lines.append("All traffic goes to: \(list(heavy.map { $0.endpoint?.description ?? "a peer with no endpoint" }))")
         }
         // Then risks, so a long route list can't push them out of view.
-        let risks = findings.filter { $0.level != .info }
-        lines += risks.prefix(6).map { "⚠︎ \($0.message)" }
-        if !risks.isEmpty { lines.append("") }
+        // The file-chosen packets first: six generic warnings must not push them out (S4 L1).
+        // The AmneziaWG traffic warnings come first (S4c L1).
+        let first: Set<String> = ["amneziawg-signature-packets", "amneziawg-amplification"]
+        let risks = findings.filter { first.contains($0.code) } + findings.filter { $0.level != .info && !first.contains($0.code) }
+        var tail: [String] = []
         let endpoints = config.peers.compactMap { $0.endpoint?.description }
-        lines.append("Endpoints: \(endpoints.isEmpty ? "none" : endpoints.prefix(6).joined(separator: ", ") + (endpoints.count > 6 ? " (+\(endpoints.count - 6) more)" : ""))")
+        tail.append("Endpoints: \(endpoints.isEmpty ? "none" : list(endpoints))")
         let coverage = config.coverage
         if coverage.isFullTunnel {
-            lines.append("Routes: \(RouteCoverage.describe(coverage.ipv4)) of IPv4 and \(RouteCoverage.describe(coverage.ipv6)) of IPv6 traffic")
+            tail.append("Routes: \(RouteCoverage.describe(coverage.ipv4)) of IPv4 and \(RouteCoverage.describe(coverage.ipv6)) of IPv6 traffic")
         } else {
             let routes = config.peers.flatMap(\.allowedIPs).map(\.description)
-            lines.append("Routes: \(routes.prefix(8).joined(separator: ", "))\(routes.count > 8 ? " (+\(routes.count - 8) more)" : "")")
+            tail.append("Routes: \(routes.prefix(8).joined(separator: ", "))\(routes.count > 8 ? " (+\(routes.count - 8) more)" : "")")
         }
+        // Risks get what the alert's 1500 characters leave after the header and the
+        // endpoint/route lines, so neither side can push the other out (S4c L1). The
+        // first risk always fits: the header and tail are capped well below the limit.
+        var budget = 1500 - (lines + tail).joined(separator: "\n").count - 40
+        var shown = 0
+        for risk in risks.prefix(6) {
+            let line = "⚠︎ " + (risk.message.count > 150 ? risk.message.prefix(149) + "…" : risk.message)
+            guard line.count + 1 <= budget || shown == 0 else { break }
+            lines.append(line)
+            budget -= line.count + 1
+            shown += 1
+        }
+        if risks.count > shown { lines.append("…and \(risks.count - shown) more") }
+        if !risks.isEmpty { lines.append("") }
+        lines += tail
         return confirm(title: "Add tunnel “\(name)”?", detail: lines.joined(separator: "\n"), action: "Add Tunnel")
     }
 
@@ -296,9 +324,14 @@ final class ControlHandler {
         approve.hasDestructiveAction = true
         approve.keyEquivalent = ""
         alert.window.level = .floating  // a background app can't take focus (cooperative activation)
-        let timeout = DispatchWorkItem { NSApp.abortModal() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 120, execute: timeout)
-        defer { timeout.cancel() }
+        // A run-loop timer in the modal mode, not DispatchQueue.main.asyncAfter: this runs inside
+        // a main-actor job, and the main queue isn't drained again until that job returns, so a
+        // queued timeout never fired. The alert stayed up and the app answered nothing (2026-10-16).
+        let timeout = Timer(timeInterval: 120, repeats: false) { _ in
+            MainActor.assumeIsolated { NSApp.abortModal() }
+        }
+        RunLoop.main.add(timeout, forMode: .modalPanel)
+        defer { timeout.invalidate() }
         let approved = alert.runModal() == .alertSecondButtonReturn
         if !approved { declinedUntil = Date().addingTimeInterval(10) }
         return approved
