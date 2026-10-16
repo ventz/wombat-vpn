@@ -1,5 +1,7 @@
 <div align="center">
 
+<p><strong>⭐ If Wombat is useful to you, please <a href="https://github.com/ventz/wombat-wireguard-mac-app">star the repo</a>.</strong> Stars help it get into the official Homebrew catalog.</p>
+
 <img src="docs/images/icon.png" alt="Wombat logo: a white ribbon folded into a W on a deep red rounded square" width="160">
 
 <h1>Wombat</h1>
@@ -12,6 +14,7 @@ Apple Network Extension, and a <code>wombat</code> command line for developers.
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 <img src="https://img.shields.io/badge/macOS-15%2B-black.svg" alt="macOS 15+">
 <img src="https://img.shields.io/badge/Swift-SwiftUI-orange.svg" alt="Swift and SwiftUI">
+<a href="https://github.com/ventz/wombat-wireguard-mac-app/stargazers"><img src="https://img.shields.io/github/stars/ventz/wombat-wireguard-mac-app?style=social" alt="GitHub stars"></a>
 
 </div>
 
