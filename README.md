@@ -80,8 +80,12 @@ app for your own WireGuard servers and your work or campus VPN, no Cisco client 
 Or with [Homebrew](https://brew.sh), which also puts the `wombat` command on your `PATH`:
 
 ```bash
+brew trust --cask ventz/tap/wombat-wireguard
 brew install --cask ventz/tap/wombat-wireguard
 ```
+
+Homebrew 7 and later only load casks from third-party taps you have trusted. The first line trusts
+just this cask; `brew trust --tap ventz/tap` trusts the whole tap instead. Skip it on older Homebrew.
 
 Wombat is signed with a Developer ID, notarized by Apple, and updates itself. Requires macOS 15
 or later (Apple silicon or Intel).

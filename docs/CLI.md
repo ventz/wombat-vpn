@@ -17,7 +17,8 @@ starts in the background if needed); key and lint commands work offline.
 
 ## Install
 
-Installing with Homebrew (`brew install --cask ventz/tap/wombat-wireguard`) links it for you.
+Installing with Homebrew (`brew trust --cask ventz/tap/wombat-wireguard`, then
+`brew install --cask ventz/tap/wombat-wireguard`) links it for you.
 Otherwise the binary ships inside the app; link it onto your `PATH`. Settings › Command Line
 shows the exact command, with a Copy button, and turns green once the link is in place:
 
