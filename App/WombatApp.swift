@@ -370,10 +370,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let connected = AppModel.shared.store.tunnels.filter(\.isActive).map(\.name)
             let alert = NSAlert()
             alert.messageText = "Quit Wombat?"
-            alert.informativeText = (connected.isEmpty
-                ? "On-demand rules keep working without the app. "
-                : "\(ListFormatter.localizedString(byJoining: connected.map { "“\($0)”" })) stays connected: tunnels run in macOS, not in the app. ")
-                + "The menu bar item goes away, and wombat's tunnel commands work again once you reopen Wombat."
+            // Plain words (user, 2026-10-16: "what does that mean -- on demand rules keep
+            // working?"), and true: the CLI relaunches the app itself (Client.startApp).
+            let still = connected.isEmpty ? ""
+                : "\(ListFormatter.localizedString(byJoining: connected.map { "“\($0)”" })) stays connected. "
+            alert.informativeText = still + "Your VPNs run in macOS, not in this app: they keep working, and so do automatic connections and the kill switch. Quitting only removes the menu bar icon."
             alert.addButton(withTitle: "Quit")
             alert.addButton(withTitle: "Cancel")
             alert.showsSuppressionButton = true
