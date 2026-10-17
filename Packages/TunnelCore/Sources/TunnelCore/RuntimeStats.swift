@@ -25,13 +25,16 @@ public struct PeerStats: Equatable, Sendable, Codable {
 public struct RuntimeStats: Equatable, Sendable, Codable {
     public var listenPort: UInt16?
     public var peers: [PeerStats] = []
+    /// Set for an OpenConnect (AnyConnect) tunnel instead of peers.
+    public var openConnect: OpenConnectStatus?
 
-    public init(listenPort: UInt16? = nil, peers: [PeerStats] = []) {
+    public init(listenPort: UInt16? = nil, peers: [PeerStats] = [], openConnect: OpenConnectStatus? = nil) {
         self.listenPort = listenPort
         self.peers = peers
+        self.openConnect = openConnect
     }
-    public var rxBytes: UInt64 { peers.reduce(0) { $0 &+ $1.rxBytes } }
-    public var txBytes: UInt64 { peers.reduce(0) { $0 &+ $1.txBytes } }
+    public var rxBytes: UInt64 { openConnect?.rxBytes ?? peers.reduce(0) { $0 &+ $1.rxBytes } }
+    public var txBytes: UInt64 { openConnect?.txBytes ?? peers.reduce(0) { $0 &+ $1.txBytes } }
     public var latestHandshake: Date? { peers.compactMap(\.lastHandshake).max() }
 
     /// Parses `key=value` lines. Secret fields (private_key, preshared_key) are skipped, never stored.

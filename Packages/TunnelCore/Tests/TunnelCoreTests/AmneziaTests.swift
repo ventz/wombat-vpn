@@ -342,7 +342,57 @@ private func errors4(_ lines: String) -> [String] {
         var text = "[Interface]\nPrivateKey = \(privA)\n" + peer(1, hosts)
         for n in 2...8 { text += peer(UInt8(n), "0.0.0.0/0, ::/0") }
         let c = try #require(WgQuick.parse(text).configuration)
-        #expect(c.internetPeers.map { $0.endpoint!.hostString } == ["peer8.example"])
+        // The decoy is named too (it does get those addresses), after the real recipient.
+        #expect(c.internetPeers.map { $0.endpoint!.hostString } == ["peer8.example", "peer1.example"])
+    }
+
+    /// Four peers splitting the default route into /2s are all named (review SEC-4).
+    @Test func splitDefaultRouteNamesEveryPeer() throws {
+        var text = "[Interface]\nPrivateKey = \(privA)\n"
+        for (n, route) in ["0.0.0.0/2", "64.0.0.0/2", "128.0.0.0/2", "192.0.0.0/2"].enumerated() { text += peer(UInt8(n + 1), route) }
+        let c = try #require(WgQuick.parse(text).configuration)
+        #expect(c.internetPeers.count == 4)
+    }
+
+    /// Small decoys listed first come after the peer that gets most traffic (SEC-4).
+    @Test func biggestShareComesFirst() throws {
+        var text = "[Interface]\nPrivateKey = \(privA)\n"
+        for n in 1...6 { text += peer(UInt8(n), "10.\(n).0.0/16") }
+        text += peer(7, "0.0.0.0/0")
+        let c = try #require(WgQuick.parse(text).configuration)
+        #expect(c.internetPeers.first?.endpoint?.hostString == "peer7.example")
+        #expect(c.internetPeers.count == 7)
+    }
+
+    /// IPv6 decoys outside 2000::/3 can't outrank the real internet recipient (security-6 L1).
+    @Test func ipv6DecoysOutsideInternetDontRankFirst() throws {
+        var text = "[Interface]\nPrivateKey = \(privA)\n"
+        for n in 1...6 { text += peer(UInt8(n), "8000::/\(n + 1)") }
+        text += peer(7, "2000::/3")
+        let c = try #require(WgQuick.parse(text).configuration)
+        #expect(c.internetPeers.map { $0.endpoint!.hostString } == ["peer7.example"])
+    }
+
+    /// 0.0.0.0/0 + 2000::/3 still blocks the rest of IPv6 (NAT64), ::/0 doesn't need to, and
+    /// 8000::/1 (no internet IPv6) does (security-6 L2, SEC-5).
+    @Test func uncoveredIPv6Blocking() {
+        func cov(_ s: String...) -> RouteCoverage { RouteCoverage(s.map { IPAddressRange($0)! }) }
+        #expect(cov("0.0.0.0/0", "2000::/3").blocksUncoveredIPv6)
+        #expect(cov("0.0.0.0/0", "8000::/1").blocksUncoveredIPv6)
+        #expect(cov("0.0.0.0/0").blocksUncoveredIPv6)
+        #expect(!cov("0.0.0.0/0", "::/0").blocksUncoveredIPv6)
+        #expect(!cov("0.0.0.0/1", "128.0.0.0/1", "::/1", "8000::/1").blocksUncoveredIPv6)
+        #expect(cov("2000::/3").blocksUncoveredIPv4)
+        #expect(!cov("10.0.0.0/8").blocksUncoveredIPv6)
+    }
+
+    /// Internet IPv6 is 2000::/3: 8000::/1 routes none of it, 2000::/3 all of it (SEC-5).
+    @Test func ipv6CoverageMeansInternetIPv6() {
+        #expect(RouteCoverage([IPAddressRange("8000::/1")!]).ipv6 == 0)
+        #expect(RouteCoverage([IPAddressRange("2000::/3")!]).ipv6 == 1)
+        #expect(RouteCoverage([IPAddressRange("::/1")!]).ipv6 == 1)
+        #expect(RouteCoverage([IPAddressRange("fd00::/8")!]).ipv6 == 0)
+        #expect(RouteCoverage([IPAddressRange("0.0.0.0/0")!, IPAddressRange("8000::/1")!]).routesMostIPv6 == false)
     }
 
     @Test func sharesSplitBetweenNestedRoutes() throws {

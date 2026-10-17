@@ -14,13 +14,15 @@ enum ConfigKeychain {
 
     /// Adds a new item and returns its persistent reference. A replaced item is deleted only after
     /// the new one is safely stored.
-    static func store(_ text: String, tunnelID: UUID, name: String, replacing old: Data? = nil) throws -> Data {
+    static func store(_ text: String, tunnelID: UUID, name: String, kind: Tunnel.Kind = .wireGuard, replacing old: Data? = nil) throws -> Data {
         let item: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: AppIdentity.keychainService,
             kSecAttrAccount: "\(tunnelID.uuidString)/\(UUID().uuidString)",
-            kSecAttrLabel: "Wombat tunnel: \(name)",
-            kSecAttrDescription: "wg-quick(8) configuration",
+            kSecAttrLabel: kind == .openConnect ? "Wombat VPN: \(name)" : "Wombat tunnel: \(name)",
+            // An AnyConnect profile holds no secret (server, group, username, certificate
+            // fingerprints); it lives here anyway so both kinds are handled the same way.
+            kSecAttrDescription: kind == .openConnect ? "AnyConnect profile" : "wg-quick(8) configuration",
             kSecAttrSynchronizable: false,
             kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecValueData: Data(text.utf8),

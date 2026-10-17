@@ -24,9 +24,14 @@ git clone -q --depth 1 --branch "$TAG" https://github.com/amnezia-vpn/amneziawg-
 actual="$(git -C "$WORK/upstream" rev-parse HEAD)"
 [[ "$actual" == "$COMMIT" ]] || { echo "check-amneziawg-vendor: $TAG is $actual, expected $COMMIT (tag moved?)" >&2; exit 1; }
 
-# The paths deliberately left out of the vendored copy (WOMBAT.md, "What was left out").
-excludes=(-x .git -x .github -x outline -x tests -x netstack -x Dockerfile -x Makefile
-          -x 'main.go' -x 'main_windows.go' -x format_test.go -x version.go)
+# The paths deliberately left out of the vendored copy (WOMBAT.md, "What was left out"),
+# removed from the clone by exact path. diff -x matches a base name at every depth, so a new
+# device/version.go would have been skipped silently (review SEC-11).
+for p in .github outline tests tun/netstack Dockerfile Makefile main.go main_windows.go format_test.go version.go; do
+    [[ -e "$WORK/upstream/$p" ]] || { echo "check-amneziawg-vendor: upstream has no $p any more; update this list" >&2; exit 1; }
+    command rm -rf "$WORK/upstream/$p"
+done
+excludes=(-x .git)
 if [[ "${1:-}" == "--stat" ]]; then
     diff -rq "${excludes[@]}" "$WORK/upstream" "$VENDOR" | sed "s|$WORK/upstream|upstream|; s|$VENDOR|vendored|" || true
 else

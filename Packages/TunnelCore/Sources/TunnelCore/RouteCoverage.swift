@@ -6,13 +6,30 @@ import Foundation
 public struct RouteCoverage: Equatable, Sendable {
     /// 0...1 of the IPv4 space.
     public let ipv4: Double
-    /// 0...1 of the IPv6 space.
+    /// 0...1 of internet IPv6: global unicast, 2000::/3. Measured against the whole IPv6 space,
+    /// `8000::/1` counted as half while routing no internet address, and the common `2000::/3`
+    /// as 12.5% (review SEC-5).
     public let ipv6: Double
+    /// 0...1 of the whole IPv6 space, ULA, link-local and NAT64 (64:ff9b::/96) included.
+    public let ipv6Space: Double
 
     public init(_ ranges: [IPAddressRange]) {
         ipv4 = Self.fraction(ranges.filter { $0.family == .v4 }, bits: 32)
-        ipv6 = Self.fraction(ranges.filter { $0.family == .v6 }, bits: 128)
+        ipv6 = Self.fraction(ranges.filter { $0.family == .v6 }, bits: 128, within: Self.globalUnicast)
+        ipv6Space = Self.fraction(ranges.filter { $0.family == .v6 }, bits: 128)
     }
+
+    /// Whether the IPv6 the tunnel doesn't route should be blocked (routed into the tunnel, where
+    /// wireguard-go drops it) because IPv4 is a full tunnel. Only when IPv6 is mostly routed by
+    /// BOTH measures is it left alone: `2000::/3` covers all internet IPv6 but not NAT64's
+    /// `64:ff9b::/96` (IPv4 sites reached over IPv6), which would then leave outside the tunnel
+    /// (security-6 L2); `8000::/1` covers half the space and no internet address (SEC-5).
+    public var blocksUncoveredIPv6: Bool { routesMostIPv4 && !(routesMostIPv6 && ipv6Space >= 0.5) }
+    /// The other way round: an IPv6 full tunnel blocks the IPv4 it doesn't route.
+    public var blocksUncoveredIPv4: Bool { routesMostIPv6 && !routesMostIPv4 }
+
+    /// 2000::/3 as an inclusive interval.
+    static let globalUnicast: (UInt128, UInt128) = (UInt128(0x2000) << 112, (UInt128(0x4000) << 112) - 1)
 
     /// Routes at least half of the family's space: treated as a full tunnel for warnings.
     /// (Typical "everything except my LAN" configs cover ~99%.)
@@ -28,16 +45,18 @@ public struct RouteCoverage: Equatable, Sendable {
         return percent < 0.1 ? "<0.1%" : String(format: "%.1f%%", min(percent, 99.9))
     }
 
-    private static func fraction(_ ranges: [IPAddressRange], bits: Int) -> Double {
-        guard !ranges.isEmpty else { return 0 }
-        // Intervals as [start, end) in UInt128; the IPv6 space end (2^128) doesn't fit, so use
-        // inclusive ends.
-        var intervals: [(UInt128, UInt128)] = ranges.map { r in
+    /// The covered share of `within` (inclusive bounds; default: the whole space).
+    private static func fraction(_ ranges: [IPAddressRange], bits: Int, within: (UInt128, UInt128)? = nil) -> Double {
+        // Intervals with inclusive ends: the IPv6 space end (2^128) doesn't fit in UInt128.
+        var intervals: [(UInt128, UInt128)] = ranges.compactMap { r in
             let start = Self.value(r.network.address)
             let hostBits = bits - Int(r.prefixLength)
             let size: UInt128 = hostBits >= 128 ? UInt128.max : (UInt128(1) << UInt128(hostBits)) - 1
-            return (start, start &+ size)
+            guard let within else { return (start, start &+ size) }
+            let clipped = (max(start, within.0), min(start &+ size, within.1))
+            return clipped.0 <= clipped.1 ? clipped : nil
         }
+        guard !intervals.isEmpty else { return 0 }
         intervals.sort { $0.0 < $1.0 }
         var covered: Double = 0
         var current = intervals[0]
@@ -50,7 +69,8 @@ public struct RouteCoverage: Equatable, Sendable {
             }
         }
         covered += Double(current.1 - current.0) + 1
-        return min(1, covered / pow(2, Double(bits)))
+        let space = within.map { Double($0.1 - $0.0) + 1 } ?? pow(2, Double(bits))
+        return min(1, covered / space)
     }
 
     static func value(_ bytes: Data) -> UInt128 {
@@ -74,7 +94,8 @@ extension TunnelConfiguration {
     }
 
     /// Addresses of each family every peer receives (see routeShares).
-    func routeCounts() -> [(peer: PeerConfiguration, ipv4: UInt128, ipv6: UInt128)] {
+    /// `internetIPv6`: count only IPv6 addresses inside 2000::/3 (security-6 L1).
+    func routeCounts(internetIPv6: Bool = false) -> [(peer: PeerConfiguration, ipv4: UInt128, ipv6: UInt128)] {
         struct Prefix: Hashable { let address: Data; let length: UInt8 }
         var counts = Array(repeating: (ipv4: UInt128(0), ipv6: UInt128(0)), count: peers.count)
         for family in [IPAddressRange.Family.v4, .v6] {
@@ -98,23 +119,29 @@ extension TunnelConfiguration {
             // Each block's size minus its direct children's: the addresses it actually gets.
             // The size of all of IPv6 (2^128) wraps to 0, so it takes 0 &- children, exact
             // unless nothing is inside it, which saturates to UInt128.max.
-            var own = routes.map { r -> UInt128 in
-                let hostBits = bits - Int(r.route.prefixLength)
-                return hostBits == 128 ? 0 : UInt128(1) << hostBits
+            // Prefixes are nested or disjoint, and 2000::/3 is one too, so a block's addresses
+            // inside it are all of the block, all of 2000::/3, or none.
+            let window = family == .v6 && internetIPv6 ? RouteCoverage.globalUnicast : nil
+            func size(_ r: IPAddressRange) -> UInt128 {
+                let hostBits = bits - Int(r.prefixLength)
+                guard let window else { return hostBits == 128 ? 0 : UInt128(1) << hostBits }
+                if start(r) >= window.0 && end(r) <= window.1 { return UInt128(1) << hostBits }
+                if start(r) <= window.0 && end(r) >= window.1 { return window.1 - window.0 + 1 }
+                return 0
             }
+            var own = routes.map { size($0.route) }
             var hasChildren = Array(repeating: false, count: routes.count)
             var stack: [Int] = []
             for (k, entry) in routes.enumerated() {
                 while let top = stack.last, end(routes[top].route) < start(entry.route) { stack.removeLast() }
                 if let parent = stack.last {
-                    let hostBits = bits - Int(entry.route.prefixLength)
-                    own[parent] &-= UInt128(1) << hostBits  // a child is never all of IPv6
+                    own[parent] &-= size(entry.route)  // a child is never all of IPv6
                     hasChildren[parent] = true
                 }
                 stack.append(k)
             }
             for (k, entry) in routes.enumerated() {
-                let count = (bits - Int(entry.route.prefixLength) == 128 && !hasChildren[k]) ? UInt128.max : own[k]
+                let count = (window == nil && bits - Int(entry.route.prefixLength) == 128 && !hasChildren[k]) ? UInt128.max : own[k]
                 if family == .v4 {
                     counts[entry.peer].ipv4 += count
                 } else {
@@ -126,13 +153,24 @@ extension TunnelConfiguration {
         return peers.indices.map { (peers[$0], counts[$0].ipv4, counts[$0].ipv6) }
     }
 
-    /// The peers that receive most of IPv4 or IPv6 (at least half of either), the biggest first.
-    /// At most one peer per family can, so this lists the real destination of internet traffic.
+    /// Every peer that receives part of a family this config routes most of, the biggest share
+    /// first. Naming only a peer with at least half let four peers splitting the default route
+    /// (/2 each) hide behind an empty list (review SEC-4); a peer whose routes are all shadowed
+    /// gets nothing and isn't named.
     public var internetPeers: [PeerConfiguration] {
-        routeCounts()
-            .filter { $0.ipv4 >= UInt128(1) << 31 || $0.ipv6 >= UInt128(1) << 127 }
-            .map { ($0.peer, max(Double($0.ipv4) / 0x1p32, Double($0.ipv6) / 0x1p128)) }
-            .sorted { $0.1 > $1.1 }
-            .map(\.0)
+        let coverage = self.coverage
+        guard coverage.isFullTunnel else { return [] }
+        var ranked: [(peer: PeerConfiguration, share: Double)] = []
+        // IPv6 shares of internet IPv6 only, like the coverage: a decoy with 8000::/2 gets none
+        // and can't outrank the real recipient (security-6 L1).
+        for entry in routeCounts(internetIPv6: true) {
+            let v4: Double = coverage.routesMostIPv4 ? Double(entry.ipv4) / 0x1p32 : 0
+            let v6: Double = coverage.routesMostIPv6 ? Double(entry.ipv6) / 0x1p125 : 0
+            if v4 > 0 || v6 > 0 { ranked.append((entry.peer, max(v4, v6))) }
+        }
+        // Stable: equal shares keep config order.
+        return ranked.enumerated()
+            .sorted { $0.element.share != $1.element.share ? $0.element.share > $1.element.share : $0.offset < $1.offset }
+            .map(\.element.peer)
     }
 }

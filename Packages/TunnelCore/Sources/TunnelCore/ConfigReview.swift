@@ -69,6 +69,10 @@ public enum ConfigReview {
                 add(.warning, "ip-family-leak",
                     "\(other) traffic is blocked while connected, because the tunnel only carries \(other == "IPv6" ? "IPv4" : "IPv6"). Add \(coverage.routesMostIPv4 ? "::/0" : "0.0.0.0/0") to AllowedIPs to route it; other WireGuard apps may send it outside the tunnel")
             }
+            if coverage.routesMostIPv4 && coverage.routesMostIPv6 && coverage.blocksUncoveredIPv6 {
+                // Internet IPv6 is routed, the rest (NAT64 64:ff9b::/96, ULA) isn't (security-6 L2).
+                add(.info, "ipv6-partial", "IPv6 outside the routed ranges (such as NAT64's 64:ff9b::/96) is blocked while connected. Use ::/0 to route all of it")
+            }
         }
 
         // A DNS server no peer routes is queried outside the tunnel, for every lookup.
@@ -84,7 +88,14 @@ public enum ConfigReview {
         for p in hostnamePeers.prefix(maxPerCode) {
             add(.info, "endpoint-hostname", "Peer \(p.publicKey.abbreviated)'s endpoint \(p.endpoint!.hostString) is resolved outside the tunnel")
         }
-        let noPSK = c.peers.filter { $0.presharedKey == nil }
+        // An all-zero PresharedKey is the same as none to WireGuard (review SEC-11).
+        let zeroPSK = c.peers.filter { $0.presharedKey?.isZero == true }
+        if !zeroPSK.isEmpty {
+            add(.warning, "zero-preshared-key", zeroPSK.count == 1
+                ? "Peer \(zeroPSK[0].publicKey.abbreviated)'s PresharedKey is all zeros, which is the same as none"
+                : "\(zeroPSK.count) peers have an all-zero PresharedKey, which is the same as none")
+        }
+        let noPSK = c.peers.filter { $0.presharedKey == nil || $0.presharedKey?.isZero == true }
         if noPSK.count == 1 {
             add(.info, "no-preshared-key", "Peer \(noPSK[0].publicKey.abbreviated) has no PresharedKey (an extra layer against future quantum attacks)")
         } else if noPSK.count > 1 {

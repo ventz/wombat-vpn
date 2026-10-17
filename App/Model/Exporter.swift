@@ -27,6 +27,7 @@ enum Exporter {
     }
 
     static func exportOne(_ tunnel: Tunnel) async throws {
+        if tunnel.isOpenConnect { return try exportProfile(tunnel) }
         guard await Authenticator.confirm(reason: "export “\(tunnel.name)” with its private key") else { throw Failure.canceled }
         let text = try fullText(tunnel)
         let panel = NSSavePanel()
@@ -37,8 +38,21 @@ enum Exporter {
         try write(Data(text.utf8), to: url)
     }
 
-    /// All tunnels in one zip, in the layout the official app (and Wombat) imports.
-    static func exportAll(_ tunnels: [Tunnel]) async throws {
+    /// An AnyConnect profile holds no secret (it can be shared with colleagues), so no Touch ID.
+    static func exportProfile(_ tunnel: Tunnel) throws {
+        guard let profile = tunnel.profile else { throw Failure.missing(tunnel.name) }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = String(ZipWriter.fileName(tunnel.name).dropLast(5)) + ".anyconnect"
+        panel.allowedContentTypes = [UTType(filenameExtension: "anyconnect") ?? .plainText]
+        panel.message = "The profile names the gateway and how to sign in. It contains no password or session."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try write(Data(OpenConnectFile.serialize(profile).utf8), to: url)
+    }
+
+    /// All WireGuard tunnels in one zip, in the layout the official app (and Wombat) imports.
+    /// AnyConnect profiles are exported one by one.
+    static func exportAll(_ all: [Tunnel]) async throws {
+        let tunnels = all.filter { !$0.isOpenConnect }
         guard !tunnels.isEmpty else { return }
         guard await Authenticator.confirm(reason: "export all \(tunnels.count) tunnels with their private keys") else { throw Failure.canceled }
         let files = try tunnels.map { ZipWriter.File(name: $0.name, text: try fullText($0)) }

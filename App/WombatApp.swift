@@ -17,6 +17,7 @@ struct WombatApp: App {
                 .environmentObject(model)
                 .environmentObject(model.store)
                 .environmentObject(model.installer)
+                .environmentObject(model.openConnectInstaller)
                 .frame(minWidth: 760, minHeight: 480)
         }
         .defaultSize(width: 980, height: 620)
@@ -40,6 +41,7 @@ struct WombatApp: App {
                 .environmentObject(model)
                 .environmentObject(model.store)
                 .environmentObject(model.installer)
+                .environmentObject(model.openConnectInstaller)
         }
     }
 }
@@ -51,6 +53,8 @@ final class AppModel: ObservableObject {
 
     let store = TunnelStore()
     let installer = ExtensionInstaller()
+    /// Activated only once there is an AnyConnect VPN (TunnelStore.needsOpenConnect).
+    let openConnectInstaller = OpenConnectInstaller()
     @Published var pendingImport: [ImportCandidate] = []
     @Published var selection: UUID?
     @Published var showingQR = false
@@ -60,6 +64,8 @@ final class AppModel: ObservableObject {
     /// The detail tab, kept when switching tunnels.
     @Published var detailTab: DetailTab = .overview
     @Published var actionError: String?
+    /// The AnyConnect add/edit sheet: nil closed, `.new`, or editing a VPN.
+    @Published var anyConnectEditor: AnyConnectEditorTarget?
 
     var selectedTunnel: Tunnel? { store.tunnels.first { $0.id == selection } }
 
@@ -125,10 +131,12 @@ final class AppModel: ObservableObject {
         guard let tunnel = selectedTunnel else { return }
         let alert = NSAlert()
         alert.messageText = "Delete “\(tunnel.name)”?"
-        alert.informativeText = "The private key is removed from the keychain now, and from the network extension now or, if it isn't running, the next time it runs. This cannot be undone."
+        alert.informativeText = tunnel.isOpenConnect
+            ? "The VPN's profile and its saved single sign-on data are removed. This cannot be undone."
+            : "The private key is removed from the keychain now, and from the network extension now or, if it isn't running, the next time it runs. This cannot be undone."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Cancel")
-        let delete = alert.addButton(withTitle: "Delete Tunnel and Keys")
+        let delete = alert.addButton(withTitle: tunnel.isOpenConnect ? "Delete VPN" : "Delete Tunnel and Keys")
         delete.hasDestructiveAction = true
         delete.keyEquivalent = ""
         guard alert.runModal() == .alertSecondButtonReturn else { return }
@@ -159,13 +167,43 @@ final class AppModel: ObservableObject {
         #endif
         // Whenever the extension becomes active (first approval, reinstall, update), hand it any
         // configurations it's missing.
-        installerObserver = installer.$state
-            .removeDuplicates()
+        // Each publisher deduplicated on its own: merged first, the second extension's .active
+        // could be dropped as a "duplicate" of the first's (Q5-L2).
+        installerObserver = installer.$state.removeDuplicates().merge(with: openConnectInstaller.$state.removeDuplicates())
             .filter { $0 == .active }
             .sink { [weak self] _ in
                 guard let self else { return }
                 Task { await self.store.reload(); await self.store.syncToExtension() }
             }
+        store.needsOpenConnect = { [weak self] in self?.openConnectInstaller.activateIfNeeded() }
+        store.openConnectBlocker = { [weak self] in
+            guard let installer = self?.openConnectInstaller else { return nil }
+            // A request already approved answers within moments.
+            for _ in 0..<30 where installer.state == .activating || installer.state == .unknown {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            switch installer.state {
+            case .needsApproval:
+                return "Allow “Wombat OpenConnect” first: System Settings › General › Login Items & Extensions › Network Extensions. Then connect again."
+            case .requiresApplicationsFolder:
+                return "Move Wombat to the Applications folder first: macOS only runs its VPN extensions from there."
+            case .failed(let reason):
+                return "The AnyConnect extension couldn't be activated: \(reason)"
+            default:
+                return nil  // active, or still activating: the start itself reports a problem
+            }
+        }
+        // The sign-in shows in the main window, on the VPN's Overview.
+        SignInCoordinator.shared.reveal = { [weak self] id in
+            guard let self else { return }
+            self.selection = id
+            self.detailTab = .overview
+            MainWindow.show()
+        }
+        store.signIn = { tunnel, profile in
+            try await SignInCoordinator.shared.signIn(tunnelID: tunnel.id, name: tunnel.name, profile: profile)
+        }
+        store.confirmTrust = { host, sha256, reason in SignInCoordinator.shared.confirmTrust(host: host, sha256: sha256, reason: reason) }
         installer.activate()
         Task { await store.reload() }
         server = ControlServer { [weak self] request in
@@ -217,7 +255,7 @@ final class AppModel: ObservableObject {
                         candidates.append(ImportCandidate(name: TunnelName.from(fileName: entry.name), text: entry.text, source: url.lastPathComponent))
                     }
                 } else {
-                    let data = try Self.readBounded(url, limit: WgQuick.maxBytes)
+                    let data = try Self.readBounded(url, limit: max(WgQuick.maxBytes, OpenConnectFile.maxBytes))
                     guard let text = String(data: data, encoding: .utf8) else { throw StoreError.invalid("\(url.lastPathComponent) is not UTF-8 text") }
                     candidates.append(ImportCandidate(name: TunnelName.from(fileName: url.lastPathComponent), text: text, source: url.lastPathComponent))
                 }
@@ -271,16 +309,31 @@ struct ImportCandidate: Identifiable {
     /// Parsed and reviewed once, not on every render: a hostile file must not cost per frame.
     let parse: WgQuick.ParseResult
     let findings: [Finding]
+    /// Set when the text is an AnyConnect profile instead of a wg-quick file.
+    let profile: OpenConnectFile.ParseResult?
+    /// The profile's client certificate as named in the keychain (looked up once, not per render).
+    let certificateName: String?
 
     init(name: String, text: String, source: String, readError: String? = nil) {
         self.name = name
         self.text = text
         self.source = source
         self.readError = readError
-        parse = WgQuick.parse(text)
-        findings = parse.configuration.map(ConfigReview.review) ?? []
-        include = readError == nil && parse.configuration != nil
+        if OpenConnectFile.looksLikeProfile(text) {
+            profile = OpenConnectFile.parse(text)
+            certificateName = profile?.profile?.clientCertificate.map { ClientIdentities.item(sha256: $0)?.name ?? "not in your keychain" }
+            parse = WgQuick.parse("")
+            findings = []
+        } else {
+            profile = nil
+            certificateName = nil
+            parse = WgQuick.parse(text)
+            findings = parse.configuration.map(ConfigReview.review) ?? []
+        }
+        include = readError == nil && isValid
     }
+
+    var isValid: Bool { profile.map { $0.profile != nil } ?? (parse.configuration != nil) }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -398,9 +451,9 @@ struct AppCommands: Commands {
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(model.selectedTunnel == nil)
             Button("Export All Tunnels to Zip…") { model.runAll { try await Exporter.exportAll($0) } }
-                .disabled(model.store.tunnels.isEmpty)
+                .disabled(!model.store.tunnels.contains { !$0.isOpenConnect })  // WireGuard tunnels only
             Button("Show QR Code…") { model.showingQR = true }
-                .disabled(model.selectedTunnel == nil)
+                .disabled(model.selectedTunnel == nil || model.selectedTunnel?.isOpenConnect == true)
             Button("Duplicate Tunnel") { model.run { tunnel in model.selection = try await model.store.duplicate(tunnel).id } }
                 .keyboardShortcut("d")
                 .disabled(model.selectedTunnel == nil)
@@ -445,10 +498,23 @@ enum ImportPanel {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.init(filenameExtension: "conf")!, .zip, .png, .jpeg, .heic, .heif, .tiff]
-        panel.message = "Choose WireGuard .conf files, a zip of them (such as the official app's “Export Tunnels to Zip”), or a picture of a QR code."
+        panel.allowedContentTypes = [.init(filenameExtension: "conf")!, .init(filenameExtension: "anyconnect")!, .zip, .png, .jpeg, .heic, .heif, .tiff]
+        panel.message = "Choose WireGuard .conf files, a zip of them (such as the official app's “Export Tunnels to Zip”), .anyconnect profiles, or a picture of a QR code."
         if panel.runModal() == .OK { model.stageImport(panel.urls) }
     }
+}
+
+/// One list for the About panel and Settings › About (quality-6 L2).
+enum Credits {
+    static let engines = [
+        "WireGuard tunnels: wireguard-go and WireGuardKit (MIT, © WireGuard LLC).",
+        "AmneziaWG tunnels: amneziawg-go (MIT, © WireGuard LLC).",
+        "AnyConnect VPNs: OpenConnect (LGPL-2.1, © David Woodhouse and contributors) and OpenSSL (Apache-2.0).",
+    ]
+    static let trademarks = [
+        "“WireGuard” and the “WireGuard” logo are registered trademarks of Jason A. Donenfeld. Wombat is not affiliated with or endorsed by the WireGuard project.",
+        "Cisco, AnyConnect and Cisco Secure Client are trademarks of Cisco Systems, Inc. Wombat is not affiliated with or endorsed by Cisco.",
+    ]
 }
 
 enum AboutPanel {
@@ -465,11 +531,19 @@ enum AboutPanel {
         add("© 2026 Ventz Petkov · MIT License")
         add("https://github.com/ventz/wombat-wireguard-mac-app", link: "https://github.com/ventz/wombat-wireguard-mac-app")
         add("")
-        add("Uses the WireGuard® protocol via wireguard-go and WireGuardKit (MIT, © WireGuard LLC).")
+        for line in Credits.engines { add(line) }
         add("https://www.wireguard.com", link: "https://www.wireguard.com")
+        add("https://www.infradead.org/openconnect/", link: "https://www.infradead.org/openconnect/")
         add("")
-        add("“WireGuard” and the “WireGuard” logo are registered trademarks of Jason A. Donenfeld. Wombat is not affiliated with or endorsed by the WireGuard project.")
+        for line in Credits.trademarks { add(line) }
         NSApp.activate()
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits, .version: ""])
     }
+}
+
+/// What the AnyConnect sheet edits.
+struct AnyConnectEditorTarget: Identifiable {
+    let id = UUID()
+    /// nil: add a new VPN.
+    let tunnelID: UUID?
 }

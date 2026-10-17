@@ -2,17 +2,39 @@ import Foundation
 import os
 import SystemExtensions
 
-/// Activates the bundled packet tunnel system extension. The first activation needs the user's
+/// Activates a bundled packet tunnel system extension. The first activation needs the user's
 /// approval in System Settings › General › Login Items & Extensions; later app updates replace
-/// the extension without asking again.
+/// the extension without asking again. There are two: WireGuard (always) and OpenConnect
+/// (activated once the user has an AnyConnect VPN, so nobody approves an extension they don't use).
 @MainActor
-final class ExtensionInstaller: NSObject, ObservableObject {
+class ExtensionInstaller: NSObject, ObservableObject {
     enum State: Equatable {
         case unknown, activating, needsApproval, active, failed(String), requiresApplicationsFolder
     }
 
     @Published private(set) var state: State = .unknown
+    let identifier: String
+    /// "WireGuard" or "OpenConnect", for banners.
+    let engineName: String
     private let log = Logger(subsystem: AppIdentity.logSubsystem, category: "extension")
+
+    init(identifier: String = AppIdentity.extensionBundleID, engineName: String = "WireGuard") {
+        self.identifier = identifier
+        self.engineName = engineName
+    }
+
+    #if DEBUG
+    /// Demo mode (screenshots) only.
+    func setDemoState(_ state: State) { self.state = state }
+    #endif
+
+    /// Activates once; later calls only retry after a failure.
+    func activateIfNeeded() {
+        switch state {
+        case .unknown, .failed: activate()
+        default: return
+        }
+    }
 
     func activate() {
         // System extensions only activate from /Applications (unless developer mode is on, which needs SIP off).
@@ -21,7 +43,7 @@ final class ExtensionInstaller: NSObject, ObservableObject {
             return
         }
         state = .activating
-        let request = OSSystemExtensionRequest.activationRequest(forExtensionWithIdentifier: AppIdentity.extensionBundleID, queue: .main)
+        let request = OSSystemExtensionRequest.activationRequest(forExtensionWithIdentifier: identifier, queue: .main)
         request.delegate = self
         OSSystemExtensionManager.shared.submitRequest(request)
     }
@@ -49,14 +71,14 @@ extension ExtensionInstaller: OSSystemExtensionRequestDelegate {
 
     nonisolated func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
         MainActor.assumeIsolated {
-            log.notice("System extension needs approval")
+            log.notice("System extension \(self.identifier, privacy: .public) needs approval")
             state = .needsApproval
         }
     }
 
     nonisolated func request(_ request: OSSystemExtensionRequest, didFinishWithResult result: OSSystemExtensionRequest.Result) {
         MainActor.assumeIsolated {
-            log.notice("System extension active (result \(result.rawValue, privacy: .public))")
+            log.notice("System extension \(self.identifier, privacy: .public) active (result \(result.rawValue, privacy: .public))")
             state = .active
         }
     }
@@ -69,8 +91,14 @@ extension ExtensionInstaller: OSSystemExtensionRequestDelegate {
                 state = .active
                 return
             }
-            log.error("System extension failed: \(error.localizedDescription, privacy: .public)")
+            log.error("System extension \(self.identifier, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             state = .failed(error.localizedDescription)
         }
     }
+}
+
+/// The OpenConnect extension's installer (its own type, so views can observe both).
+@MainActor
+final class OpenConnectInstaller: ExtensionInstaller {
+    init() { super.init(identifier: AppIdentity.openConnectExtensionBundleID, engineName: "OpenConnect") }
 }

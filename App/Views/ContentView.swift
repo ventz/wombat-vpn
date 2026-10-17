@@ -7,6 +7,7 @@ struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var store: TunnelStore
     @EnvironmentObject private var installer: ExtensionInstaller
+    @EnvironmentObject private var openConnectInstaller: OpenConnectInstaller
     @State private var showingNewTunnel = false
     @State private var dropTargeted = false
 
@@ -19,7 +20,11 @@ struct ContentView: View {
                 .safeAreaInset(edge: .top, spacing: 0) {
                     // In the detail column only: across the whole split view it covered the sidebar.
                     if installer.needsAttention {
-                        ExtensionBanner()
+                        ExtensionBanner(installer: installer)
+                    } else if openConnectInstaller.needsAttention, store.tunnels.contains(where: \.isOpenConnect) {
+                        // Only while an AnyConnect VPN exists: the extension is requested by the first
+                        // one, and the banner must not stay after the last is deleted (user, 2026-10-16).
+                        ExtensionBanner(installer: openConnectInstaller)
                     } else if let problem = store.extensionProblem {
                         ExtensionProblemBanner(message: problem)
                     }
@@ -36,10 +41,11 @@ struct ContentView: View {
                     Button("Scan QR Code…") { model.showingScanner = true }
                     Divider()
                     Button("New Empty Tunnel…") { showingNewTunnel = true }
+                    Button("Add AnyConnect VPN…") { model.anyConnectEditor = AnyConnectEditorTarget(tunnelID: nil) }
                 } label: {
                     Label("Add Tunnel", systemImage: "plus")
                 }
-                .help("Import .conf files, a zip or a QR code (⌘O), or create a new tunnel (⌘N)")
+                .help("Import .conf files, a zip or a QR code (⌘O), create a new WireGuard tunnel (⌘N), or add a Cisco AnyConnect VPN")
             }
             // In this toolbar, not the detail view's: as a centered (.principal) item the picker
             // left the gear stranded before it, and the gear belongs at the trailing edge.
@@ -86,6 +92,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingNewTunnel) {
             NewTunnelSheet()
+        }
+        .sheet(item: $model.anyConnectEditor) { target in
+            AnyConnectEditor(tunnel: target.tunnelID.flatMap { id in store.tunnels.first { $0.id == id } })
         }
         .sheet(isPresented: $model.showingQR) {
             if let tunnel = model.selectedTunnel { QRCodeSheet(tunnel: tunnel) }
@@ -207,6 +216,7 @@ struct SidebarView: View {
 }
 
 struct SidebarRow: View {
+    @ObservedObject private var signIn = SignInCoordinator.shared
     @ObservedObject var tunnel: Tunnel
     @EnvironmentObject private var store: TunnelStore
     @EnvironmentObject private var model: AppModel
@@ -244,23 +254,30 @@ struct SidebarRow: View {
         }
     }
 
+    /// A sign-in under way shows in the row too, so it can't go unnoticed (accessibility-6 M2).
+    private var signingIn: Bool { signIn.activeTunnelID == tunnel.id }
+
     private var spokenStatus: String {
+        if signingIn { return "Signing in, waiting for you" }
         if let error = tunnel.lastError { return "\(tunnel.statusText), error: \(error)" }
         if tunnel.status == .connected, let since = tunnel.connectedSince {
             return "Connected " + since.formatted(.relative(presentation: .named))
         }
         if tunnel.isOnDemand && tunnel.status == .disconnected { return "Disconnected, on demand" }
+        if tunnel.isOnDemandPaused { return "\(tunnel.statusText), on demand paused" }
         return tunnel.statusText
     }
 
     private var subtitle: String {
+        if signingIn { return "Signing in…" }
         if let error = tunnel.lastError { return "Error: \(error)" }
         if tunnel.status == .connected, let since = tunnel.connectedSince {
             return "Connected · " + since.formatted(.relative(presentation: .named))
         }
         if tunnel.isOnDemand && tunnel.status == .disconnected { return "On demand" }
-        let detail = tunnel.configuration?.peers.first?.endpoint?.hostString ?? tunnel.statusText
-        return tunnel.configuration?.isAmnezia == true ? "AmneziaWG · \(detail)" : detail
+        if tunnel.isOnDemandPaused && tunnel.status == .disconnected { return "On demand paused" }
+        let detail = tunnel.serverText ?? tunnel.statusText
+        return tunnel.protocolName == "WireGuard" ? detail : "\(tunnel.protocolName) · \(detail)"
     }
 }
 
@@ -317,7 +334,7 @@ struct EmptyStateView: View {
                 .frame(width: 96, height: 96)
             Text("No tunnels yet")
                 .font(.title2.weight(.semibold))
-            Text("Drop .conf files or a QR code picture here, import the zip from the official app\n(Manage Tunnels › Export Tunnels to Zip), scan a QR code, or create a new tunnel.")
+            Text("Drop .conf files or a QR code picture here, import the zip from the official app\n(Manage Tunnels › Export Tunnels to Zip), scan a QR code, create a new tunnel,\nor add a Cisco AnyConnect VPN.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             HStack {
@@ -325,6 +342,7 @@ struct EmptyStateView: View {
                     .keyboardShortcut(.defaultAction)
                 Button("Scan QR Code…") { model.showingScanner = true }
                 Button("New Tunnel…") { showingNewTunnel = true }
+                Button("Add AnyConnect VPN…") { model.anyConnectEditor = AnyConnectEditorTarget(tunnelID: nil) }
             }
             .controlSize(.large)
         }
@@ -357,19 +375,38 @@ struct ExtensionProblemBanner: View {
 }
 
 struct ExtensionBanner: View {
-    @EnvironmentObject private var installer: ExtensionInstaller
+    @ObservedObject var installer: ExtensionInstaller
 
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "exclamationmark.shield.fill")
                 .font(.title2)
                 .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 2) {
+                .accessibilityHidden(true)  // the title says it (A6-L4)
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.headline)
-                Text(detail).font(.callout).foregroundStyle(.secondary)
+                if !detail.isEmpty { Text(detail).font(.callout).foregroundStyle(.secondary) }
+                // Numbered steps rather than one long sentence (user, 2026-10-16).
+                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("\(index + 1).").monospacedDigit().fontWeight(.semibold)
+                        Text(step)
+                    }
+                    .font(.callout)
+                    // One stop per step, read as words: VoiceOver says "ⓘ" and "›" literally (A6-L4).
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Step \(index + 1): " + step.replacingOccurrences(of: " › ", with: ", then ")
+                        .replacingOccurrences(of: " (ⓘ)", with: ""))
+                }
+                if !footer.isEmpty { Text(footer).font(.callout).foregroundStyle(.secondary) }
             }
-            .accessibilityElement(children: .combine)
             Spacer()
+            // What the switches look like in System Settings (user, 2026-10-16: "a PREVIEW
+            // screenshot in the app is helpful"). Drawn, not a screenshot: sharp, dark mode.
+            if installer.state == .needsApproval {
+                ExtensionSwitchPreview(highlight: installer.identifier)
+                    .accessibilityHidden(true)  // the steps say the same in words
+            }
             switch installer.state {
             case .needsApproval:
                 Button("Open System Settings") {
@@ -388,19 +425,19 @@ struct ExtensionBanner: View {
 
     private var title: String {
         switch installer.state {
-        case .needsApproval: return "Allow the Wombat network extension"
+        case .needsApproval: return installer.engineName == "OpenConnect" ? "Allow Wombat's OpenConnect extension" : "Allow the Wombat network extension"
         case .requiresApplicationsFolder: return "Move Wombat to the Applications folder"
-        case .failed: return "The network extension could not be activated"
+        case .failed: return "The \(installer.engineName == "OpenConnect" ? "OpenConnect" : "network") extension could not be activated"
         default: return ""
         }
     }
 
+    private var isOpenConnect: Bool { installer.engineName == "OpenConnect" }
+
     private var detail: String {
         switch installer.state {
         case .needsApproval:
-            // The exact clicks, matching macOS 15+ (verified 2026-10-14): the switch is behind the ⓘ.
-            let app = (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Wombat") + ".app"
-            return "In System Settings › General › Login Items & Extensions, scroll to Extensions, choose By Category, click ⓘ next to Network Extensions, turn on \(app), then click Done. Tunnels can't connect until you do."
+            return isOpenConnect ? "AnyConnect VPNs run in a second extension, kept apart from your WireGuard keys." : ""
         case .requiresApplicationsFolder:
             return "macOS only runs network extensions for apps in /Applications."
         case .failed(let message):
@@ -408,5 +445,101 @@ struct ExtensionBanner: View {
         default:
             return ""
         }
+    }
+
+    /// The exact clicks, matching macOS 15+ (verified 2026-10-14): the switch is behind the ⓘ.
+    private var steps: [String] {
+        guard installer.state == .needsApproval else { return [] }
+        let app = ExtensionSwitchPreview.appName
+        // System Settings lists each extension by its display name under the app (verified
+        // 2026-10-16: "Wombat Tunnel" and "Wombat OpenConnect" under Wombat.app).
+        return [
+            "Click Open System Settings (General › Login Items & Extensions).",
+            "Scroll to Extensions and choose By Category.",
+            "Click the Info button (ⓘ) next to Network Extensions.",
+            "Under \(app), turn on “\(ExtensionSwitchPreview.displayName(installer.identifier))”, then click Done.",
+        ]
+    }
+
+    private var footer: String {
+        guard installer.state == .needsApproval else { return "" }
+        return "\(isOpenConnect ? "AnyConnect VPNs" : "Tunnels") can't connect until you do."
+    }
+}
+
+/// A small drawing of System Settings' Network Extensions sheet: the app, its extensions with
+/// their switches, and the one to turn on highlighted.
+struct ExtensionSwitchPreview: View {
+    let highlight: String
+
+    /// The name System Settings shows: the extension's CFBundleDisplayName.
+    static func displayName(_ identifier: String) -> String {
+        let url = Bundle.main.bundleURL.appendingPathComponent("Contents/Library/SystemExtensions/\(identifier).systemextension")
+        return shown(Bundle(url: url)?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? identifier)
+    }
+
+    static var appName: String {
+        shown((Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Wombat") + ".app")
+    }
+
+    /// Screenshots come from the Debug build but show the release names.
+    private static func shown(_ name: String) -> String {
+        #if DEBUG
+        if DemoMode.isOn { return name.replacingOccurrences(of: "Wombat Debug", with: "Wombat") }
+        #endif
+        return name
+    }
+
+    /// As System Settings shows them: the OpenConnect extension appears only once requested,
+    /// and by then the WireGuard one ("Wombat Tunnel") is normally on already.
+    private var rows: [String] {
+        highlight == AppIdentity.openConnectExtensionBundleID
+            ? [AppIdentity.extensionBundleID, AppIdentity.openConnectExtensionBundleID]
+            : [AppIdentity.extensionBundleID]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 18, height: 18)
+                Text(Self.appName).font(.caption.weight(.semibold))
+            }
+            .padding(.vertical, 5)
+            ForEach(rows, id: \.self) { id in
+                Divider()
+                HStack(spacing: 6) {
+                    Image(systemName: "puzzlepiece.extension.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+                    Text(Self.displayName(id)).font(.caption).lineLimit(1).fixedSize()
+                    Spacer(minLength: 12)
+                    // The one to turn on is drawn off, with a tag; the others are on already (A6-L5).
+                    if id == highlight {
+                        Text("Turn on")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Color.accentColor, in: Capsule())
+                    }
+                    Capsule()
+                        .fill(id == highlight ? Color.secondary.opacity(0.35) : Color.accentColor)
+                        .frame(width: 22, height: 13)
+                        .overlay(alignment: id == highlight ? .leading : .trailing) {
+                            Circle().fill(.white).frame(width: 11, height: 11).padding(1)
+                        }
+                }
+                .padding(.vertical, 4)
+                .padding(.horizontal, 4)
+                .background(id == highlight ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .overlay {
+                    if id == highlight { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) }
+                }
+            }
+        }
+        .padding(8)
+        .frame(width: 290)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
     }
 }

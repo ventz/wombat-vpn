@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Wombat: a native WireGuard client for macOS</title>
-<meta name="description" content="A native, free and open-source WireGuard client for macOS, built security-first: SwiftUI app, Apple Network Extension, kill switch, on-demand, AmneziaWG support, and a full command line for developers.">
+<title>Wombat: WireGuard and Cisco AnyConnect for macOS</title>
+<meta name="description" content="WireGuard and Cisco AnyConnect in one native, free and open-source Mac app: the last VPN software you need. Built security-first: SwiftUI app, Apple Network Extension, kill switch, on-demand, AmneziaWG, SAML/Duo/certificate sign-in, and a full command line for developers.">
 <link rel="icon" href="/icon.png" type="image/png">
 <link rel="apple-touch-icon" href="/icon.png">
 <link rel="canonical" href="https://wombat.vpetkov.net/">
@@ -12,18 +12,18 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Wombat">
 <meta property="og:url" content="https://wombat.vpetkov.net/">
-<meta property="og:title" content="Wombat: the modern WireGuard client for Mac">
-<meta property="og:description" content="Native, free and open source. Security first: no root helper, a kill switch, and leak checks on every import. Plus a real command line.">
-<meta property="og:image" content="https://wombat.vpetkov.net/og.png">
+<meta property="og:title" content="Wombat: WireGuard and Cisco AnyConnect for Mac">
+<meta property="og:description" content="The last VPN software you need: WireGuard, AmneziaWG and Cisco AnyConnect in one native, free and open-source Mac app. Security first, with a real command line.">
+<meta property="og:image" content="https://wombat.vpetkov.net/og.png?v=2">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Wombat's app icon and main window, with the tagline: the modern WireGuard client for Mac">
+<meta property="og:image:alt" content="Wombat's app icon and main window, with the tagline: WireGuard and Cisco AnyConnect for Mac, the last VPN software you need">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Wombat: the modern WireGuard client for Mac">
-<meta name="twitter:description" content="Native, free and open source. Security first, with a real command line.">
-<meta name="twitter:image" content="https://wombat.vpetkov.net/og.png">
-<meta name="twitter:image:alt" content="Wombat's app icon and main window, with the tagline: the modern WireGuard client for Mac">
+<meta name="twitter:title" content="Wombat: WireGuard and Cisco AnyConnect for Mac">
+<meta name="twitter:description" content="WireGuard, AmneziaWG and Cisco AnyConnect in one native, free and open-source Mac app. Security first.">
+<meta name="twitter:image" content="https://wombat.vpetkov.net/og.png?v=2">
+<meta name="twitter:image:alt" content="Wombat's app icon and main window, with the tagline: WireGuard and Cisco AnyConnect for Mac, the last VPN software you need">
 <style>
   :root {
     color-scheme: dark;
@@ -93,8 +93,18 @@
     font-weight: 700;
   }
 
-  .tagline {
+  .tagline-lead {
     margin: 18px auto 0;
+    max-width: 30em;
+    font-size: clamp(18px, 2.8vw, 21px);
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--ink);
+    text-wrap: balance;
+  }
+
+  .tagline {
+    margin: 12px auto 0;
     max-width: 32em;
     font-size: clamp(16px, 2.4vw, 18.5px);
     color: var(--muted);
@@ -181,7 +191,6 @@
     color: var(--muted);
   }
 
-  .subhead { margin: 34px 0 14px; }
 
   .why {
     margin: 0 auto;
@@ -219,6 +228,8 @@
     color: var(--ink);
   }
 
+  .terminal .cmd { display: block; }
+  .terminal .cmd + .cmd { margin-top: 1.7em; }  /* one blank line */
   .terminal .p { color: var(--red-lift); user-select: none; }
   .terminal .c { color: var(--muted); }
   .terminal .ok { color: var(--green); }
@@ -231,6 +242,8 @@
     padding: 0;
     margin: 0;
   }
+
+  .features.subhead { margin: 34px 0 14px; }
 
   .features li {
     background: var(--panel);
@@ -306,8 +319,11 @@
 <header>
     <img class="icon" src="/icon.png" alt="" width="132" height="132" onerror="this.remove()">
     <h1>Wombat</h1>
+    <p class="tagline-lead">
+      WireGuard®, AmneziaWG and Cisco AnyConnect in one app: the last VPN software you need.
+    </p>
     <p class="tagline">
-      A <strong>native</strong>, <strong>free</strong> and <strong>open-source</strong> WireGuard®
+      A <strong>native</strong>, <strong>free</strong> and <strong>open-source</strong> VPN
       client for macOS. <strong>Secure</strong> first, <strong>easy and beautiful</strong> to use,
       and <strong>powerful</strong> when you need it, with a command line developers will actually use.
     </p>
@@ -332,7 +348,7 @@
   </header>
 <main>
 
-  <img class="hero" src="/screenshots/overview-dark.webp?v=4" width="1600" height="1063"
+  <img class="hero" src="/screenshots/overview-dark.webp?v=6" width="1600" height="1063"
        alt="Wombat's main window: a connected tunnel named Home with received and sent totals, the latest handshake, its interface and its peer">
 
   <hr class="rule">
@@ -381,11 +397,15 @@
     </li>
     <li>
       <h3>Safe on shared Macs</h3>
-      <span>Each macOS user sees and starts only their own tunnels, even though VPN settings are system-wide.</span>
+      <span>Each macOS user sees and starts only their own tunnels, even though VPN settings are system-wide. An on-demand tunnel that comes up at the login window stops when another account signs in.</span>
     </li>
     <li>
       <h3>A current engine</h3>
       <span>Built on current wireguard-go (October 2026), not the 2023 one the official app still ships, plus our own fixes for crashes and sleep.</span>
+    </li>
+    <li>
+      <h3>AnyConnect, walled off</h3>
+      <span>Cisco VPNs run in a separate system extension that never holds a WireGuard key. Sign-in is Wombat's own Swift code, and gateways that demand a host scan are refused: nothing a server sends is ever run.</span>
     </li>
   </ul>
 
@@ -400,25 +420,25 @@
   <div class="gallery">
     <figure class="narrow">
       <h3>Menu bar</h3>
-      <img src="/screenshots/menubar-dark.webp?v=4" width="824" height="862" loading="lazy"
+      <img src="/screenshots/menubar-dark.webp?v=6" width="824" height="862" loading="lazy"
            alt="The menu bar popover with a switch for each tunnel and live transfer for the connected one">
       <figcaption>Every tunnel one click away, with live transfer.</figcaption>
     </figure>
     <figure>
       <h3>Import review</h3>
-      <img src="/screenshots/import-dark.webp?v=4" width="1504" height="1264" loading="lazy"
+      <img src="/screenshots/import-dark.webp?v=6" width="1504" height="1264" loading="lazy"
            alt="The import sheet showing two tunnels; one is flagged for a PostUp script, missing DNS and an IPv6 leak">
       <figcaption>See where traffic goes, and what's risky, before anything is saved.</figcaption>
     </figure>
     <figure>
       <h3>Connection: on demand and kill switch</h3>
-      <img src="/screenshots/connection-dark.webp?v=4" width="1600" height="1063" loading="lazy"
+      <img src="/screenshots/connection-dark.webp?v=6" width="1600" height="1063" loading="lazy"
            alt="On-demand settings with Wi-Fi and Ethernet switches, trusted networks, and the kill switch">
       <figcaption>macOS runs the rules, even with the app closed.</figcaption>
     </figure>
     <figure>
       <h3>Config file</h3>
-      <img src="/screenshots/config-file-dark.webp?v=4" width="1600" height="1063" loading="lazy"
+      <img src="/screenshots/config-file-dark.webp?v=6" width="1600" height="1063" loading="lazy"
            alt="The Config File tab showing the wg-quick text with keys hidden">
       <figcaption>Plain wg-quick text. Keys stay hidden until Touch ID.</figcaption>
     </figure>
@@ -437,10 +457,6 @@
       <h3>Live status</h3>
       <span>Handshakes, endpoints and transfer per peer, in the window and the menu bar.</span>
     </li>
-    <li>
-      <h3>Accessible</h3>
-      <span>VoiceOver labels and announcements, keyboard shortcuts for the common actions, and status shown by shape as well as color.</span>
-    </li>
   </ul>
 
   <hr class="rule">
@@ -453,16 +469,12 @@
   </p>
   <figure class="terminal" aria-label="Example terminal session using the wombat command">
     <div class="chrome" aria-hidden="true"><i></i><i></i><i></i></div>
-<pre tabindex="0" aria-label="Terminal output (scrolls sideways)"><span class="p">$ </span>wombat status
+<pre tabindex="0" aria-label="Terminal output (scrolls sideways)"><span class="cmd"><span class="p">$ </span>wombat status
 <span class="ok">●</span> home     connected  since 9:41 AM  vpn.example.com:51820
-○ office   disconnected  on-demand  kill-switch
-<span class="p">$ </span>wombat show home
+○ office   disconnected  on-demand  kill-switch</span><span class="cmd"><span class="p">$ </span>wombat show home
 peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
   latest handshake: 42 s ago
-  transfer: 1.2 GB received, 88 MB sent
-<span class="p">$ </span>wombat check deploy/*.conf --strict   <span class="c"># lint in CI, exit 1 on risks</span>
-<span class="p">$ </span>wombat genkey | tee priv.key | wombat pubkey
-<span class="p">$ </span>wombat logs -f</pre>
+  transfer: 1.2 GB received, 88 MB sent</span><span class="cmd"><span class="p">$ </span>wombat check deploy/*.conf --strict   <span class="c"># lint in CI, exit 1 on risks</span></span><span class="cmd"><span class="p">$ </span>(umask 077; wombat genkey &gt; priv.key) &amp;&amp; wombat pubkey &lt; priv.key</span><span class="cmd"><span class="p">$ </span>wombat logs -f</span></pre>
   </figure>
 
   <ul class="features subhead">
@@ -492,9 +504,95 @@ peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
     </li>
   </ul>
 
+  <hr class="rule">
+
+  <p class="eyebrow">4 &middot; Cisco AnyConnect</p>
+  <h2>Your work VPN, in the same app</h2>
+  <p class="lead">
+    Most universities and companies run Cisco AnyConnect (Cisco Secure Client). Wombat connects to
+    those gateways too, through <a href="https://www.infradead.org/openconnect/">OpenConnect</a>,
+    so one app covers your own WireGuard servers and your work or campus VPN. No Cisco client
+    needed.
+  </p>
+  <div class="gallery">
+    <figure>
+      <h3>Connected to work</h3>
+      <img src="/screenshots/anyconnect-dark.webp?v=6" width="1600" height="1063" loading="lazy"
+           alt="A connected Cisco AnyConnect VPN named Work: traffic over DTLS, the gateway, group and username, and the address, routes and DNS the gateway assigned">
+      <figcaption>Gateway, routes and encryption at a glance.</figcaption>
+    </figure>
+    <figure>
+      <h3>One-time setup</h3>
+      <img src="/screenshots/extension-approval-dark.webp?v=6" width="1600" height="1063" loading="lazy"
+           alt="Wombat's banner asking to allow the OpenConnect extension, with four numbered steps and a small picture of the System Settings switch to turn on">
+      <figcaption>Step-by-step, with a picture of the switch to turn on.</figcaption>
+    </figure>
+  </div>
+  <ul class="features subhead">
+    <li>
+      <h3>Sign in your organization's way</h3>
+      <span>Password, Duo (push, phone call or passcode), single sign-on (Okta, Entra ID, Duo SSO and other SAML providers), or a client certificate from your keychain.</span>
+    </li>
+    <li>
+      <h3>Single sign-on in your own browser</h3>
+      <span>SSO opens in your default browser, so passkeys, password managers and an existing session just work. Prefer to keep it separate? Each VPN can sign in inside Wombat instead, with its own cookies. Either way the sign-in shows right on the VPN's screen, no pop-up windows.</span>
+    </li>
+    <li>
+      <h3>The gateways you already have</h3>
+      <span>Cisco ASA and Firepower, and the open-source ocserv. DTLS keeps it fast, and Wombat always negotiates the best TLS the gateway offers, back to the older ones it still accepts.</span>
+    </li>
+    <li>
+      <h3>Its own sandbox</h3>
+      <span>OpenConnect runs in a second system extension that never holds a WireGuard key. The session token lives only in memory, and the tunnel accepts only the gateway certificate macOS trusted when you signed in.</span>
+    </li>
+    <li>
+      <h3>Nothing from the server runs</h3>
+      <span>Gateways that demand a Cisco host scan (HostScan/CSD) are refused rather than run. Wombat's build of OpenConnect also carries fixes for memory-safety bugs we found and reported upstream.</span>
+    </li>
+    <li>
+      <h3>Shareable profiles</h3>
+      <span>Export a VPN as an <code>.anyconnect</code> file for colleagues, with no secrets inside, or script it: <code>wombat import work.anyconnect</code>, then <code>wombat up work</code>.</span>
+    </li>
+  </ul>
+
+  <hr class="rule">
+
+  <p class="eyebrow">5 &middot; Accessible</p>
+  <h2>Built for everyone</h2>
+  <p class="lead">
+    A VPN is something you need to trust at a glance. Wombat's interface is audited against WCAG 2.2 AA
+    (as applied to Mac apps), and the findings are fixed before release.
+  </p>
+  <ul class="features subhead">
+    <li>
+      <h3>VoiceOver throughout</h3>
+      <span>Every control is labeled. Connecting, disconnecting, imports and errors are announced, and so is each step of a VPN sign-in: Duo prompts, wrong passwords and gateway messages.</span>
+    </li>
+    <li>
+      <h3>Keyboard first</h3>
+      <span>Works from the keyboard, including Full Keyboard Access, with shortcuts for the common actions (&#8984;N new tunnel, &#8984;O import, &#8679;&#8984;V paste). Sign-in forms put focus in the first empty field: Return signs in, Escape cancels.</span>
+    </li>
+    <li>
+      <h3>Not by color alone</h3>
+      <span>Each tunnel's status has its own symbol shape as well as its color, in the window and the menu bar. Text colors are checked for contrast in light and dark mode, and selection gets stronger with Increase Contrast.</span>
+    </li>
+    <li>
+      <h3>Sign-in without hurdles</h3>
+      <span>Paste is never blocked, password managers and AutoFill fill the fields, and there are no puzzles: sign-in follows WCAG's accessible authentication rule.</span>
+    </li>
+    <li>
+      <h3>Safe prompts</h3>
+      <span>Approval dialogs make Cancel the default, so a stray Return never approves anything, and they bounce the Dock icon so a request isn't missed.</span>
+    </li>
+    <li>
+      <h3>Plain words</h3>
+      <span>Errors and warnings say what happened and what to do next, not an error code, and the import review explains each risk it finds in a config.</span>
+    </li>
+  </ul>
+
   <p class="callout">
     <strong>Free and open source under the MIT license.</strong> Built on wireguard-go and
-    WireGuardKit, with amneziawg-go for AmneziaWG tunnels.
+    WireGuardKit, with amneziawg-go for AmneziaWG tunnels and OpenConnect (LGPL) for AnyConnect.
   </p>
 
 </main>
@@ -505,6 +603,8 @@ peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
       “WireGuard” and the “WireGuard” logo are registered trademarks of Jason A. Donenfeld.
       Wombat is not affiliated with or endorsed by the WireGuard project.
       <a href="https://www.wireguard.com/">wireguard.com</a>
+      Cisco, AnyConnect and Cisco Secure Client are trademarks of Cisco Systems, Inc.; Wombat is not
+      affiliated with or endorsed by Cisco.
     </p>
   </footer>
 </div>

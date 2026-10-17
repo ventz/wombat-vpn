@@ -9,6 +9,18 @@ private func config(_ body: String) throws -> TunnelConfiguration {
 
 private func codes(_ c: TunnelConfiguration) -> Set<String> { Set(ConfigReview.review(c).map(\.code)) }
 
+@Suite struct ZeroPresharedKeyTests {
+    /// WireGuard treats an all-zero PresharedKey as none, so it is flagged, not counted (SEC-11).
+    @Test func allZeroPSKIsFlagged() throws {
+        let zero = String(repeating: "A", count: 43) + "="
+        let text = "[Interface]\nPrivateKey = \(privA)\n[Peer]\nPublicKey = \(KeyPair.publicKey(for: WireGuardKey(base64: privA)!).base64)\nPresharedKey = \(zero)\nAllowedIPs = 10.0.0.0/8\n"
+        let c = try #require(WgQuick.parse(text).configuration)
+        let codes = ConfigReview.review(c).map(\.code)
+        #expect(codes.contains("zero-preshared-key"))
+        #expect(codes.contains("no-preshared-key"))
+    }
+}
+
 @Suite struct ConfigReviewTests {
     @Test func fullTunnelWithoutDNSIsALeak() throws {
         let c = try config("[Peer]\nPublicKey = \(pubB)\nAllowedIPs = 0.0.0.0/0, ::/0")

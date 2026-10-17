@@ -21,6 +21,8 @@ public enum ZipWriter {
         for file in files {
             let name = uniqueName(fileName(file.name), used: &used)
             let nameData = Data(name.utf8)
+            // Checked, never trapping: fileName keeps names far below this (SEC-11).
+            guard let nameLength = UInt16(exactly: nameData.count) else { continue }
             let content = [UInt8](file.text.utf8)
             let crc = CRC32.checksum(content)
             let offset = UInt32(out.count)
@@ -32,7 +34,7 @@ public enum ZipWriter {
             out.append(le16: dosTime); out.append(le16: dosDate)
             out.append(le32: crc)
             out.append(le32: UInt32(content.count)); out.append(le32: UInt32(content.count))
-            out.append(le16: UInt16(nameData.count)); out.append(le16: 0)
+            out.append(le16: nameLength); out.append(le16: 0)
             out.append(nameData)
             out.append(contentsOf: content)
 
@@ -44,7 +46,7 @@ public enum ZipWriter {
             central.append(le16: dosTime); central.append(le16: dosDate)
             central.append(le32: crc)
             central.append(le32: UInt32(content.count)); central.append(le32: UInt32(content.count))
-            central.append(le16: UInt16(nameData.count))
+            central.append(le16: nameLength)
             central.append(le16: 0); central.append(le16: 0)  // extra, comment
             central.append(le16: 0); central.append(le16: 0)  // disk, internal attributes
             central.append(le32: UInt32(0o100600) << 16)      // -rw------- (keys inside)
@@ -68,6 +70,9 @@ public enum ZipWriter {
         let safe = TunnelName.sanitize(tunnelName)
             .map { "/\\:".contains($0) ? "-" : $0 }
         var base = String(safe).trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        // Names are capped in characters, and one character can be dozens of UTF-8 bytes; a zip
+        // name must fit in 16 bits (review SEC-11), and macOS file names in 255 bytes.
+        while base.utf8.count > 200 { base.removeLast() }
         if base.isEmpty { base = "Tunnel" }
         return base + ".conf"
     }

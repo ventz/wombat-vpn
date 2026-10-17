@@ -6,9 +6,11 @@
 
 <h1>Wombat</h1>
 
+<p><strong>WireGuard®, AmneziaWG and Cisco AnyConnect in one app: the last VPN software you need.</strong></p>
+
 <p>
-A native, free and open-source WireGuard® client for macOS, built security-first: SwiftUI app,
-Apple Network Extension, and a <code>wombat</code> command line for developers.
+A native, free and open-source VPN client for macOS. Secure first, easy and beautiful to use,
+and powerful when you need it, with a command line developers will actually use.
 </p>
 
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
@@ -20,8 +22,8 @@ Apple Network Extension, and a <code>wombat</code> command line for developers.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://wombat.vpetkov.net/screenshots/overview-dark.webp?v=4">
-    <img src="https://wombat.vpetkov.net/screenshots/overview-light.webp?v=4" width="820"
+    <source media="(prefers-color-scheme: dark)" srcset="https://wombat.vpetkov.net/screenshots/overview-dark.webp?v=6">
+    <img src="https://wombat.vpetkov.net/screenshots/overview-light.webp?v=6" width="820"
          alt="Wombat's main window: a connected tunnel named Home with received and sent totals, the latest handshake, its interface and its peer">
   </picture>
 </p>
@@ -60,14 +62,20 @@ Wombat speaks standard wg-quick `.conf` files and imports the official app's
 [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go), the WireGuard variant that disguises
 its traffic from deep packet inspection, so exports from the AmneziaWG app import too.
 
+And it connects to **Cisco AnyConnect / Secure Client** gateways (ASA, Firepower, and the open
+source ocserv), the VPN most universities and companies run, with sign-in by password, Duo,
+single sign-on (SAML: Okta, Entra ID, Duo SSO…) or a client certificate from your keychain. One
+app for your own WireGuard servers and your work or campus VPN, no Cisco client needed.
+
 ## Quick Install
 
 1. Download **[Wombat.dmg](https://wombat.vpetkov.net/Wombat.dmg)** (always the latest version;
    also on [GitHub Releases](https://github.com/ventz/wombat-wireguard-mac-app/releases)).
 2. Open it and drag **Wombat** into **Applications** (network extensions only run from there).
 3. Open Wombat, then allow its network extension once: **System Settings › General › Login Items
-   & Extensions** › **Extensions** › **By Category** › **ⓘ** next to **Network Extensions** › turn
-   on **Wombat.app** › **Done**.
+   & Extensions** › **Extensions** › **By Category** › **ⓘ** next to **Network Extensions** ›
+   under **Wombat.app**, turn on **Wombat Tunnel** › **Done**. Your first Cisco AnyConnect VPN
+   asks once more: turn on **Wombat OpenConnect** there too.
 
 Or with [Homebrew](https://brew.sh), which also puts the `wombat` command on your `PATH`:
 
@@ -91,6 +99,13 @@ scripts/build-signed.sh --install
 
 - **Import anything:** drag in `.conf` files, a zip of them, or paste from the clipboard. Every
   import shows where traffic will go and what's risky before anything is saved.
+- **Cisco AnyConnect:** add a VPN by its gateway address and sign in the way your organization
+  does: password, Duo (push, call or passcode), SAML single sign-on in your default browser
+  (passkeys and password managers work) or inside Wombat, or a keychain certificate. The
+  sign-in shows right on the VPN's Overview, with no pop-up windows. Runs on
+  [OpenConnect](https://www.infradead.org/openconnect/) with DTLS, in its own system extension.
+  Profiles export as `.anyconnect` files to share with colleagues. See
+  [docs/OPENCONNECT.md](docs/OPENCONNECT.md).
 - **QR codes:** scan a tunnel's QR code with the Mac's camera (or an iPhone as Continuity
   Camera), or import a screenshot or picture of one. Going the other way, Show QR Code puts a
   tunnel on your phone, after Touch ID.
@@ -119,9 +134,11 @@ scripts/build-signed.sh --install
 ```bash
 wombat import ~/Downloads/home.conf   # approve in the app
 wombat up home
+wombat import work.anyconnect         # a Cisco AnyConnect VPN
+wombat up work                        # sign in in Wombat (password, Duo, SSO)
 wombat show home                      # like `wg show`
 wombat check *.conf --strict          # lint; exit 1 on errors or risks
-wombat genkey | tee priv.key | wombat pubkey
+(umask 077; wombat genkey > priv.key) && wombat pubkey < priv.key
 wombat logs -f                        # stream app and tunnel logs
 ```
 
@@ -143,14 +160,24 @@ Security is the first design goal, ahead of speed and convenience.
 - **Configs can't run code.** `PostUp`, `PreDown` and friends are parsed, flagged and ignored.
   AmneziaWG settings are checked against Wombat's own limits, so a downloaded file can't make
   the tunnel send oversized or endless junk before each handshake.
-- **The CLI can't silently weaken you.** Importing, deleting, renaming, switching away from a
-  protected tunnel, turning off on-demand or the kill switch, and exporting keys all need your
-  approval (or Touch ID) in the app.
+- **The CLI can't silently weaken you.** Importing, deleting, renaming, disconnecting or switching
+  away from a protected tunnel, turning off on-demand or the kill switch, and exporting keys all
+  need your approval (or Touch ID) in the app.
 - **Fails closed.** If macOS doesn't apply the tunnel's routes and DNS, the tunnel doesn't report
   itself as connected; the address family a full tunnel leaves out is blocked, not leaked. A
   tunnel edited while the extension wasn't running never starts from its old configuration.
 - **Safe on shared Macs.** VPN settings are system-wide, but each macOS user sees and starts only
-  their own tunnels.
+  their own tunnels. (An on-demand tunnel may come up at the login window before anyone signs in,
+  and stops when another account signs in.)
+- **AnyConnect is walled off.** OpenConnect's C code runs in a second system extension, a
+  separate sandboxed process that never holds a WireGuard key. Sign-in is Wombat's own Swift
+  code: client certificates are used through the keychain (the private key never leaves it), the
+  session token goes to the extension over the signed XPC connection and lives only in memory,
+  and the tunnel accepts only the gateway certificate macOS trusted at sign-in. Gateways that
+  demand a Cisco host scan are refused: Wombat never runs programs a server sends. The bundled
+  OpenConnect library is built with every process-spawning call stubbed out and is patched for
+  memory-safety bugs reachable from a hostile gateway (see
+  [Vendor/openconnect/WOMBAT.md](Vendor/openconnect/WOMBAT.md)).
 - **Signed end to end.** Developer ID signed and notarized; the app, extension and CLI check each
   other's signatures, and updates are EdDSA-signed on top.
 
@@ -162,6 +189,7 @@ vulnerability, see [SECURITY.md](SECURITY.md).
 | Document | What's in it |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, where secrets live, trust boundaries, leak protection |
+| [docs/OPENCONNECT.md](docs/OPENCONNECT.md) | Cisco AnyConnect: sign-in methods, profiles, what's supported, how it's isolated |
 | [docs/CLI.md](docs/CLI.md) | Every `wombat` command, JSON output, exit codes, completion |
 | [docs/DEVELOPING.md](docs/DEVELOPING.md) | Building, signing, the test peer, debugging |
 
@@ -178,8 +206,15 @@ project with no promise of support.
   (license © WireGuard LLC); Wombat's changes to it are listed in
   [Vendor/amneziawg-go/WOMBAT.md](Vendor/amneziawg-go/WOMBAT.md).
 
+- AnyConnect tunnels run on [OpenConnect](https://www.infradead.org/openconnect/) (libopenconnect,
+  LGPL-2.1, © David Woodhouse and contributors) with [OpenSSL](https://www.openssl.org/) 3.5 LTS
+  (Apache-2.0); see [Vendor/openconnect/WOMBAT.md](Vendor/openconnect/WOMBAT.md) for how they are
+  built and relinked.
+
 “WireGuard” and the “WireGuard” logo are registered trademarks of Jason A. Donenfeld. Wombat is
 not affiliated with or endorsed by the WireGuard project. See [wireguard.com](https://www.wireguard.com/).
+Cisco, AnyConnect and Cisco Secure Client are trademarks of Cisco Systems, Inc.; Wombat is not
+affiliated with or endorsed by Cisco.
 
 ## License
 

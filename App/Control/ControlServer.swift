@@ -105,16 +105,18 @@ final class ControlServer: @unchecked Sendable {
         // cap requests still being handled, so waiting ones can't pile up sockets and work
         // without bound (audit WOM-12).
         done()
-        guard Self.pending.enter() else {
-            reply(client, .failure("Too many requests are waiting; try again"))
-            return
-        }
+        // Validated before taking a slot: an early return after enter() leaked it for good
+        // (review SEC-11).
         guard let request = try? Control.decode(Control.Request.self, from: data) else {
             reply(client, .failure("Could not decode request"))
             return
         }
         guard request.v == Control.protocolVersion else {
             reply(client, .failure("Protocol version \(request.v) is not supported (app speaks \(Control.protocolVersion)); update the CLI or the app"))
+            return
+        }
+        guard Self.pending.enter() else {
+            reply(client, .failure("Too many requests are waiting; try again"))
             return
         }
         let handler = self.handler

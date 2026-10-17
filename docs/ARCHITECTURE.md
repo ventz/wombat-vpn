@@ -6,6 +6,7 @@ How Wombat is built, where secrets live, and what each part trusts.
 
 - [Components](#components)
 - [Where secrets live](#where-secrets-live)
+- [Cisco AnyConnect](#cisco-anyconnect)
 - [Trust boundaries](#trust-boundaries)
 - [Leak protection](#leak-protection)
 - [Updates](#updates)
@@ -21,12 +22,18 @@ flowchart LR
     App -- "NETunnelProviderManager" --> NE["macOS Network Extension<br/>(nesessionmanager)"]
     NE -- "starts / stops" --> Ext["Tunnel system extension<br/>root, sandboxed"]
     Ext --> Engine["WireGuardKit + wireguard-go<br/>or amneziawg-go, utun"]
+    App -- "XPC: profile + session token" --> OCExt["OpenConnect system extension<br/>root, sandboxed, own process"]
+    NE -- "starts / stops" --> OCExt
+    OCExt --> OCEngine["libopenconnect + OpenSSL<br/>CSTP/DTLS, utun"]
+    App -- "HTTPS sign-in<br/>(Swift, URLSession, WKWebView)" --> GW["AnyConnect gateway"]
 ```
 
 | Part | Runs as | Holds |
 |---|---|---|
 | `App/` (Wombat.app) | you, App Sandbox | UI, your keychain copy of each config, CLI control socket |
 | `Tunnel/` (system extension) | root, App Sandbox | the packet tunnel, its own root-only copy of each config |
+| `OpenConnect/` (second system extension) | root, App Sandbox | AnyConnect tunnels: profile copies, session tokens in memory |
+| `ExtensionShared/` | (both extensions) | the write-only secret store, the per-tunnel log buffer |
 | `CLI/` (`wombat`) | you | nothing; asks the app, or works offline (`check`, `genkey`) |
 | `Packages/TunnelCore` | (library) | wg-quick parser, validation, review, stats, the CLI protocol |
 
@@ -43,7 +50,9 @@ once.
 
 macOS stores VPN configurations in `/Library/Preferences/com.apple.networkextension.plist`, which
 **every local user can read**. So that file only holds non-secrets: a format version, a random tunnel id, the owner's uid, and
-a random revision id (below).
+a random revision id (below). The "Server" field there is the constant "Wombat" for every tunnel,
+since an endpoint identifies the server to a censor. Tunnel names and the trusted Wi-Fi names of
+on-demand rules are still in that file; macOS needs them there.
 
 Each tunnel's wg-quick text, private key included, exists in two places:
 
@@ -82,6 +91,48 @@ Hence the second copy.
 The extension passes only an allowlist of non-secret fields (counters, endpoints, public keys)
 from the live statistics it sends the app, so secrets don't cross back. Engine log lines go to the system log as private.
 
+## Cisco AnyConnect
+
+AnyConnect VPNs are a second engine with the same rules, in a separate process
+([OPENCONNECT.md](OPENCONNECT.md) has the user side):
+
+- **A second system extension** (`<bundle>.openconnect`, Mach service `<group>.openconnect`) runs
+  libopenconnect. It never holds a WireGuard key, and the WireGuard extension never runs
+  OpenConnect code: a memory-safety bug a hostile gateway triggers in C stays in that sandbox.
+  It is activated only when the user adds an AnyConnect VPN, and stays installed after the last
+  one is deleted (it then never runs).
+- **Sign-in happens in the app, in Swift** (`TunnelCore/AnyConnectSignIn.swift`): the
+  aggregate-auth XML conversation over URLSession, with macOS trust evaluation or the profile's
+  pin, the client identity from the keychain (the TLS stack signs with it there), and SAML in a
+  `WKWebView` with a per-VPN website data store, https only, accepting the token cookie only from
+  the gateway's domain on its final page. Replies are capped at 512 KB, 32 levels and 10,000
+  elements; DTDs are refused; field names the server sends must be safe XML names before they
+  are written back.
+- **Single sign-on in the default browser** (Cisco's external-browser mode): the sign-in sends
+  STRAP P-256 public keys; the browser returns the token to a one-shot loopback listener on port
+  29786 (`BrowserSignIn.swift`, the app's only use of `network.server`), encrypted to the STRAP
+  DH key (`AnyConnectStrap.swift`: ECDH, HKDF-SHA256 "AC_ECIES", AES-256-GCM with a 12-byte tag
+  on CommonCrypto's AES block, checked against the published GCM vectors). The STRAP signing key
+  goes to the extension with the session; libopenconnect signs the CONNECT's channel binding.
+- **What crosses to the extension:** the profile (no secret: server, group, username,
+  certificate fingerprints) as a 0600 root-only record like a wg-quick text, and the
+  `AnyConnectSession` (token, host, the IP address and leaf-certificate SHA-256 the sign-in
+  saw). The session is validated, bound to the caller's uid and the profile revision, kept in
+  memory only, refused if older than 10 minutes, and dropped when the tunnel stops (the stop
+  logs it off at the gateway). The XPC service still has no read call.
+- **The extension trusts nothing on its own:** OpenSSL gets no trust store, so every gateway
+  certificate reaches Wombat's callback, which requires the exact certificate the app saw at
+  sign-in and, without a pin, a macOS trust evaluation for the host. The gateway's name resolves
+  only to the address the sign-in used (`openconnect_override_getaddrinfo`), which also keeps
+  working with the kill switch on.
+- **No processes.** libopenconnect is built with `fork`, `exec*`, `posix_spawn` and `system`
+  renamed to stubs that fail; `build-openconnect.sh` and `build-signed.sh` check the archive and
+  the signed binary. vpnc-script, CSD/HostScan and helper programs can't run. Gateways that
+  require a host scan are refused during sign-in.
+- **Routes and DNS** come from the gateway (`OpenConnectNetworkPlan`): validated, capped,
+  excluding everything is ignored, and a family the gateway leaves out of a full tunnel is routed
+  into the tunnel instead of leaking.
+
 ## Trust boundaries
 
 - **App ↔ extension:** `NSXPCListener.setConnectionCodeSigningRequirement` and
@@ -92,26 +143,34 @@ from the live statistics it sends the app, so secrets don't cross back. Engine l
   extension binary started as an ordinary user can't collect keys.
 - **Other accounts on the Mac:** VPN configurations are system-wide. Each records its owner's
   uid; the app lists only its user's tunnels, and the extension starts a tunnel only for its
-  owner (or when nobody is logged in, for on-demand at boot).
+  owner. The one exception: while the login window has the screen, a start macOS makes on its own
+  for a tunnel with on-demand on (no start options; the app mirrors the on-demand switch into
+  `providerConfiguration`, which the extension can read) may run, and that tunnel stops as soon as another account
+  takes the screen (`ExtensionShared/ConsoleOwner.swift`). AnyConnect VPNs get no exception.
 - **CLI ↔ app:** a Unix socket in the app group container, created 0600. The app checks the
   peer's uid and its code signature (read from the audit token, not the pid): it must be
   `<bundle>.cli` signed by the same team. The CLI checks the app the same way before it writes
   a request.
 - **What the CLI may do alone:** read status and stats, connect, and disconnect a tunnel without
   on-demand. The signature proves the binary, not who launched it, so everything else asks in
-  the app: import, delete, rename, disconnecting an on-demand tunnel, connecting one tunnel when
+  the app: import, delete, rename, disconnecting a tunnel with on-demand or an active kill switch, connecting one tunnel when
   that switches off another's on-demand or kill switch, turning on-demand off or narrowing it,
   trusting a Wi-Fi network, and allowing the LAN. Turning the kill switch off and exporting
   keys need Touch ID or your password. Approval dialogs default to Cancel, show one at a time,
-  and decline themselves after two minutes.
+  and decline themselves after two minutes; after a decline (or a canceled Touch ID), new requests
+  are refused for 10 seconds, also across an app restart. macOS's own controls (System Settings,
+  `scutil --nc stop`) can always stop a tunnel; the app can't gate those.
 
 ## Leak protection
 
-- **Full tunnel** means the peers route at least half of IPv4 or IPv6, measured on merged ranges.
-  That way `0.0.0.0/1, 128.0.0.0/1` counts as a full tunnel, just like `0.0.0.0/0`.
+- **Full tunnel** means the peers route at least half of IPv4, or of internet IPv6 (2000::/3),
+  measured on merged ranges. That way `0.0.0.0/1, 128.0.0.0/1` counts as a full tunnel, just like
+  `0.0.0.0/0`, while `8000::/1` (half of IPv6, none of the internet) doesn't.
 - **Address-family leaks:** when one family is full-tunneled and the other isn't (only
   `0.0.0.0/0`), the other family is routed into the tunnel too. wireguard-go has no peer for it
   and drops it, so IPv6 is blocked while connected rather than revealing your real address.
+  A family that has routes but no interface address gets a placeholder address (a fixed ULA, or
+  192.0.0.8), so its routes take effect.
 - **Kill switch** (`includeAllNetworks`) is on by default for full-tunnel imports, with the local
   network blocked. That defends against routes the local network controls: DHCP option 121
   (TunnelVision, CVE-2024-3661) and spoofed local subnets (TunnelCrack LocalNet, CVE-2023-36672).

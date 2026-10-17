@@ -19,7 +19,8 @@ struct ConfigFileTab: View {
                 editor
             } else {
                 ScrollView {
-                    Text(tunnel.configuration.map { WgQuick.serialize($0, includePrivateKey: false) } ?? "")
+                    Text(tunnel.isOpenConnect ? tunnel.profile.map(OpenConnectFile.serialize) ?? ""
+                         : tunnel.configuration.map { WgQuick.serialize($0, includePrivateKey: false) } ?? "")
                         .font(.body.monospaced())
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -39,6 +40,12 @@ struct ConfigFileTab: View {
                     Button("Save") { Task { await save() } }
                         .keyboardShortcut("s")
                         .disabled(saving || !WgQuick.parse(text).errors.isEmpty)
+                } else if tunnel.isOpenConnect {
+                    Spacer()
+                    Text("No passwords or keys: you sign in at each connect").font(.callout)
+                    Button("Export Profile…") { model.run { try await Exporter.exportOne($0) } }
+                    Button("Edit…") { model.anyConnectEditor = AnyConnectEditorTarget(tunnelID: tunnel.id) }
+                        .keyboardShortcut("e")
                 } else {
                     Spacer()
                     if let saveError {

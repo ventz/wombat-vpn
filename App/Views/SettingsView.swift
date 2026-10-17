@@ -14,6 +14,8 @@ struct SettingsView: View {
 
 private struct GeneralSettings: View {
     @EnvironmentObject private var installer: ExtensionInstaller
+    @EnvironmentObject private var openConnectInstaller: OpenConnectInstaller
+    @EnvironmentObject private var store: TunnelStore
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     /// Set while the switch is put back after a failure, so that change isn't acted on (and the
     /// error it explains isn't cleared by it; quality-3).
@@ -89,17 +91,22 @@ private struct GeneralSettings: View {
                     }
             }
             UpdatesSection()
-            Section("Network extension") {
-                LabeledContent("Status", value: statusText)
-                Button("Reinstall Extension") { installer.activate() }
+            Section("Network extensions") {
+                LabeledContent("WireGuard", value: Self.statusText(installer.state))
+                Button("Reinstall WireGuard Extension") { installer.activate() }
+                // Activated only once there is an AnyConnect VPN (quality-6 L1).
+                if openConnectInstaller.state != .unknown || store.tunnels.contains(where: \.isOpenConnect) {
+                    LabeledContent("AnyConnect (OpenConnect)", value: Self.statusText(openConnectInstaller.state))
+                    Button("Reinstall AnyConnect Extension") { openConnectInstaller.activate() }
+                }
             }
             if let error { ErrorLabel(error) }
         }
         .formStyle(.grouped)
     }
 
-    private var statusText: String {
-        switch installer.state {
+    private static func statusText(_ state: ExtensionInstaller.State) -> String {
+        switch state {
         case .active: return "Active"
         case .activating: return "Activating…"
         case .needsApproval: return "Waiting for approval in System Settings"
@@ -286,10 +293,10 @@ private struct AboutSettings: View {
                 Text("© 2026 Ventz Petkov. Free and open source under the MIT License: use, change and share it.")
             }
             Section("Credits") {
-                Text("Tunnel engine: wireguard-go and WireGuardKit (MIT, © WireGuard LLC).")
-                Text("“WireGuard” and the “WireGuard” logo are registered trademarks of Jason A. Donenfeld. Wombat is not affiliated with or endorsed by the WireGuard project.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                ForEach(Credits.engines, id: \.self) { Text($0) }
+                ForEach(Credits.trademarks, id: \.self) {
+                    Text($0).font(.callout).foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)

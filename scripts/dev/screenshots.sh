@@ -21,7 +21,11 @@ command rm -rf "$CONTAINER_DIR"
 osascript -e 'quit app "Wombat Debug"' >/dev/null 2>&1 || true
 # Through LaunchServices, so the app may take focus: an inactive window renders gray traffic
 # lights and gray switches. -W waits until the app quits when the captures are done.
-open -W -n --env WOMBAT_DEMO=1 --env WOMBAT_CAPTURE=1 "$APP"
+# One launch per appearance: a fresh launch gets the focus; a second pass in the same launch
+# often rendered inactive (gray traffic lights) while the Mac was in use.
+for appearance in dark light; do
+    open -W -n --env WOMBAT_DEMO=1 --env WOMBAT_CAPTURE=1 --env WOMBAT_CAPTURE_APPEARANCE=$appearance "$APP"
+done
 
 mkdir -p "$RAW" "$SITE"
 shopt -s nullglob

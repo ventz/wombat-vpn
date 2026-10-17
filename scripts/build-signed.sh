@@ -70,8 +70,11 @@ xcodebuild -exportArchive -archivePath "$archive" -exportPath "$out/export" \
 say "Auditing signatures"
 # Outputs are read into variables, never piped to grep -q: under pipefail an early grep exit
 # kills the writer with SIGPIPE and a passing check fails at random (see Moo's release.sh).
-extension=$(ls -d "$app/Contents/Library/SystemExtensions/"*.systemextension)
-for code in "$app" "$extension" "$app/Contents/Helpers/wombat"; do
+# Two system extensions: WireGuard (.tunnel) and OpenConnect (.openconnect), each its own process.
+extensions=()
+while IFS= read -r ext; do extensions+=("$ext"); done < <(ls -d "$app/Contents/Library/SystemExtensions/"*.systemextension)
+[[ ${#extensions[@]} -eq 2 ]] || { echo "expected 2 system extensions, found ${#extensions[@]}" >&2; exit 1; }
+for code in "$app" "${extensions[@]}" "$app/Contents/Helpers/wombat"; do
     signature=$(codesign -dvv "$code" 2>&1)
     [[ "$signature" == *"Authority=Developer ID Application"* ]] \
         || { echo "not Developer ID signed: $code" >&2; exit 1; }
@@ -82,7 +85,7 @@ for code in "$app" "$extension" "$app/Contents/Helpers/wombat"; do
     # variables) would undo what the runtime protects; nothing here needs them.
     [[ "$entitlements" != *com.apple.security.cs.* ]] || { echo "carries a hardened-runtime exception: $code" >&2; exit 1; }
 done
-for code in "$app" "$extension"; do
+for code in "$app" "${extensions[@]}"; do
     entitlements=$(codesign -d --entitlements - --xml "$code" 2>/dev/null)
     [[ "$entitlements" == *packet-tunnel-provider-systemextension* ]] \
         || { echo "missing packet-tunnel-provider-systemextension: $code" >&2; exit 1; }
@@ -103,10 +106,38 @@ codesign --verify --deep --strict "$app"
 # Release builds authenticate each other with this requirement (Shared/CodeSigning.swift); if a
 # binary didn't satisfy it, the app, extension and CLI would refuse to talk at run time.
 readonly DEVELOPER_ID_REQ='anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
-for code in "$app" "$extension" "$app/Contents/Helpers/wombat"; do
+# The OpenConnect extension never starts processes: its libopenconnect calls stubs instead
+# (scripts/build-openconnect.sh), so no exec-family symbol may be imported.
+for ext in "${extensions[@]}"; do
+    [[ "$ext" == *.openconnect.systemextension ]] || continue
+    binary="$ext/Contents/MacOS/$(basename "$ext" .systemextension)"
+    [[ -x "$binary" ]] || { echo "no OpenConnect extension binary at $binary" >&2; exit 1; }
+    imports=$(nm -u "$binary")  # a failing nm fails the build, never an empty (passing) list
+    # Sanity: the list is real only if it has imports the extension certainly uses.
+    [[ "$imports" == *_SecTrustEvaluateWithError* && "$imports" == *_getaddrinfo* ]] \
+        || { echo "unexpected import list for $binary" >&2; exit 1; }
+    while IFS= read -r symbol; do
+        case "$symbol" in
+            _posix_spawn_file_actions_*|_posix_spawnattr_*) ;;  # building blocks only, harmless alone
+            _fork|_fork\$*|_vfork*|_exec*|_posix_spawn*|_system|_system\$*|_popen*|*OBJC_CLASS_\$_NSTask*)
+                echo "the OpenConnect extension imports $symbol: $binary" >&2; exit 1 ;;
+        esac
+    done <<< "$imports"
+    # LGPL and OpenSSL license texts must ship with the library (Vendor/openconnect/WOMBAT.md), and
+    # the library must be Wombat's patched build: these messages exist only in the patches
+    # (scripts/patch-openconnect.py; quality-6 L11).
+    for license in COPYING.LGPL LICENSE.openssl; do
+        [[ -s "$ext/Contents/Resources/$license" ]] || { echo "missing $license in $ext" >&2; exit 1; }
+    done
+    marks=$(strings "$binary")
+    for mark in "Gateway sent an invalid MTU" "Gateway sent too many headers" "Gateway chose a compression that wasn't requested"; do
+        [[ "$marks" == *"$mark"* ]] || { echo "libopenconnect in $binary lacks the patch message: $mark" >&2; exit 1; }
+    done
+done
+for code in "$app" "${extensions[@]}" "$app/Contents/Helpers/wombat"; do
     codesign --verify -R="$DEVELOPER_ID_REQ" "$code" || { echo "does not satisfy the Developer ID requirement: $code" >&2; exit 1; }
 done
-echo "app, extension and CLI: Developer ID, hardened runtime, no get-task-allow or runtime exceptions, NE entitlement for system extensions"
+echo "app, both extensions and CLI: Developer ID, hardened runtime, no get-task-allow or runtime exceptions, NE entitlement for system extensions"
 
 if [[ $notarize -eq 1 ]]; then
     say "Notarizing (a few minutes at Apple)"

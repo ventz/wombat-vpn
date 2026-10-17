@@ -49,6 +49,17 @@ enum DemoMode {
             return t
         }
 
+        func anyConnect(_ name: String, _ status: NEVPNStatus, _ profile: OpenConnectProfile) -> Tunnel {
+            let manager = NETunnelProviderManager()
+            manager.localizedDescription = name
+            let proto = NETunnelProviderProtocol()
+            proto.providerBundleIdentifier = AppIdentity.openConnectExtensionBundleID
+            manager.protocolConfiguration = proto
+            let t = Tunnel(manager: manager, id: UUID())
+            t.setDemo(status: status, profile: profile, stats: nil, since: nil)
+            return t
+        }
+
         let now = Date()
         let homeStats = RuntimeStats(listenPort: 51820, peers: [
             PeerStats(publicKey: "", endpoint: "198.51.100.24:51820", lastHandshake: now.addingTimeInterval(-38),
@@ -81,6 +92,7 @@ enum DemoMode {
             Endpoint = 203.0.113.17:51820
             PersistentKeepalive = 25
             """),
+            anyConnect("Work", .disconnected, OpenConnectProfile(server: URL(string: "https://vpn.example.edu/staff")!, group: "Staff", username: "jdoe")),
             tunnel("Travel", .disconnected, """
             Address = 10.66.0.9/32, fd00:66::9/128
             DNS = 10.66.0.1
@@ -104,13 +116,16 @@ enum DemoMode {
         window.setContentSize(NSSize(width: 1080, height: 680))
         window.center()
 
-        for (appearance, suffix) in [(NSAppearance.Name.darkAqua, "dark"), (.aqua, "light")] {
+        // One appearance per launch when WOMBAT_CAPTURE_APPEARANCE is set (screenshots.sh): only
+        // a fresh launch is sure to get the focus, and a second pass often rendered inactive.
+        let only = ProcessInfo.processInfo.environment["WOMBAT_CAPTURE_APPEARANCE"]
+        for (appearance, suffix) in [(NSAppearance.Name.darkAqua, "dark"), (.aqua, "light")] where only == nil || only == suffix {
             NSApp.appearance = NSAppearance(named: appearance)
             for tab in [DetailTab.overview, .connection, .configFile] {
                 makeKey(window)
                 model.detailTab = tab
                 try? await Task.sleep(for: .milliseconds(900))
-                save(window, "\(dir)/\(tab.rawValue.lowercased().replacingOccurrences(of: " ", with: "-"))-\(suffix).png")
+                await saveActive(window, "\(dir)/\(tab.rawValue.lowercased().replacingOccurrences(of: " ", with: "-"))-\(suffix).png")
             }
             model.detailTab = .overview
 
@@ -125,6 +140,53 @@ enum DemoMode {
             if let sheet = window.attachedSheet { save(sheet, "\(dir)/import-\(suffix).png") } else { print("demo: no import sheet") }
             model.pendingImport = []
             try? await Task.sleep(for: .milliseconds(600))
+
+            // An AnyConnect VPN, connected (Home steps aside: one tunnel at a time).
+            if let home = model.store.tunnels.first(where: { $0.name == "Home" }),
+               let work = model.store.tunnels.first(where: { $0.isOpenConnect }), let profile = work.profile,
+               let homeConfig = home.configuration {
+                var status = OpenConnectStatus()
+                status.rxBytes = 734_118_402; status.txBytes = 96_330_115
+                status.ipv4 = "10.140.12.77/32"; status.dnsServers = ["10.140.0.53", "10.140.0.54"]
+                status.routes = ["10.0.0.0/8", "172.16.0.0/12"]; status.gateway = "203.0.113.40"
+                status.transport = "DTLS"; status.cipher = "DTLS1.2-ECDHE-RSA-AES256-GCM"
+                status.connectedSince = Date().addingTimeInterval(-47 * 60)
+                let homeStats = home.stats
+                home.setDemo(status: .disconnected, config: homeConfig, stats: nil, since: nil)
+                work.setDemo(status: .connected, profile: profile, stats: RuntimeStats(openConnect: status), since: status.connectedSince)
+                model.selection = work.id
+                makeKey(window)
+                try? await Task.sleep(for: .milliseconds(900))
+                await saveActive(window, "\(dir)/anyconnect-\(suffix).png")
+                work.setDemo(status: .disconnected, profile: profile, stats: nil, since: nil)
+                home.setDemo(status: .connected, config: homeConfig, stats: homeStats, since: Date().addingTimeInterval(-3 * 3600 - 17 * 60))
+
+                // The browser sign-in step, on the VPN's Overview (no pop-up window).
+                do {
+                    let request = SSORequest(loginURL: URL(string: "https://vpn.example.edu/+CSCOE+/saml/sp/login")!,
+                                             finalURL: "https://vpn.example.edu/+CSCOE+/saml_ac_login.html", tokenCookie: "acSamlv2Token",
+                                             browserMode: "external")
+                    SignInCoordinator.shared.setDemo(tunnelID: work.id, name: work.name, server: "vpn.example.edu", step: .browser(request))
+                    try? await Task.sleep(for: .milliseconds(900))
+                    await saveActive(window, "\(dir)/anyconnect-signin-\(suffix).png")
+                    SignInCoordinator.shared.setDemo(tunnelID: nil, name: "", server: "", step: .working(""))
+                }
+
+                // The approval banner with its System Settings preview.
+                model.openConnectInstaller.setDemoState(.needsApproval)
+                try? await Task.sleep(for: .milliseconds(900))
+                await saveActive(window, "\(dir)/extension-approval-\(suffix).png")
+                model.openConnectInstaller.setDemoState(.active)
+                // The same banner for the WireGuard extension, as on first launch.
+                model.installer.setDemoState(.needsApproval)
+                try? await Task.sleep(for: .milliseconds(900))
+                await saveActive(window, "\(dir)/extension-approval-wireguard-\(suffix).png")
+                model.installer.setDemoState(.active)
+                model.selection = home.id
+                try? await Task.sleep(for: .milliseconds(600))
+            } else {
+                print("demo: no AnyConnect demo VPN")
+            }
 
             // The menu bar popover's content, in a window of the same width.
             let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 260), styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
@@ -151,9 +213,22 @@ enum DemoMode {
             if !panel.isKeyWindow { print("demo: the menu bar panel is not key; its switches render gray") }
             save(panel, "\(dir)/menubar-\(suffix).png")
             panel.close()
+            makeKey(window)  // the main window must be main again for the next pass
         }
         print("demo: captured to \(dir)")
         AppDelegate.quitWithoutAsking = true; NSApp.terminate(nil)
+    }
+
+    /// Saves only once the window is key in the active app: an inactive window renders gray
+    /// traffic lights and switches (pitfall 16), which happens while someone uses the Mac.
+    private static func saveActive(_ window: NSWindow, _ path: String) async {
+        for attempt in 0..<20 {
+            if NSApp.isActive && window.isKeyWindow && window.isMainWindow { break }
+            if attempt == 19 { print("demo: \(path) is inactive (the app never got focus)") }
+            makeKey(window)
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+        save(window, path)
     }
 
     /// A background app can't take focus, so float the window, order it front and make it key
@@ -162,7 +237,8 @@ enum DemoMode {
         NSApp.activate()
         window.level = .floating
         window.orderFrontRegardless()
-        window.makeKey()
+        window.makeKeyAndOrderFront(nil)
+        window.makeMain()
     }
 
     private typealias CreateImage = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?

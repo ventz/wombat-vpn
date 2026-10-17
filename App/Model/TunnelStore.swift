@@ -13,7 +13,16 @@ final class Tunnel: ObservableObject, Identifiable {
     private(set) var manager: NETunnelProviderManager
     let id: UUID
     @Published private(set) var status: NEVPNStatus
+    /// WireGuard (or AmneziaWG) tunnel, or a Cisco AnyConnect VPN. Fixed per tunnel: it decides
+    /// which system extension runs it.
+    let kind: Kind
+    /// WireGuard only.
     @Published private(set) var configuration: TunnelConfiguration?
+    /// AnyConnect only.
+    @Published private(set) var profile: OpenConnectProfile?
+    /// The profile's client certificate, as named in the keychain; looked up when the profile
+    /// loads, never in a view body (Q5-M7). nil: none chosen; "" : missing from the keychain.
+    @Published private(set) var clientCertificateName: String?
     /// Computed once per configuration change, never in a view body (a hostile config can make
     /// the review expensive).
     @Published private(set) var findings: [Finding] = []
@@ -21,19 +30,44 @@ final class Tunnel: ObservableObject, Identifiable {
     @Published var lastError: String?
     /// The error says the network extension is off: the UI offers to open its settings. Derived
     /// from the message, so a later, unrelated error never shows the button (quality-3).
-    var errorNeedsExtension: Bool { lastError == ExtensionSecrets.notRunning }
+    var errorNeedsExtension: Bool { lastError == ExtensionSecrets.notRunning || lastError == ExtensionSecrets.openConnectNotRunning }
     /// The last engine log lines fetched from the extension, kept after the tunnel stops.
     @Published var recentLog: [String] = []
+
+    enum Kind: String { case wireGuard, openConnect }
 
     init(manager: NETunnelProviderManager, id: UUID) {
         self.manager = manager
         self.id = id
+        let bundle = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier
+        kind = bundle == AppIdentity.openConnectExtensionBundleID ? .openConnect : .wireGuard
         status = manager.connection.status
+    }
+
+    var engine: ExtensionSecrets.Engine { kind == .openConnect ? .openConnect : .wireGuard }
+    var isOpenConnect: Bool { kind == .openConnect }
+    /// Where the tunnel goes, for lists: the AnyConnect gateway or the first peer's endpoint.
+    var serverText: String? {
+        isOpenConnect ? profile?.displayServer : configuration?.peers.first?.endpoint?.hostString
+    }
+    /// "WireGuard", "AmneziaWG" or "AnyConnect".
+    var protocolName: String {
+        isOpenConnect ? "AnyConnect" : (configuration?.isAmnezia == true ? "AmneziaWG" : "WireGuard")
     }
 
     var name: String { manager.localizedDescription ?? "Tunnel" }
     var proto: NETunnelProviderProtocol? { manager.protocolConfiguration as? NETunnelProviderProtocol }
-    var isOnDemand: Bool { manager.isOnDemandEnabled }
+    /// On-demand that macOS is actually running: rules only run for the enabled configuration,
+    /// and enabling another VPN (another account's tunnel, another app) disables this one
+    /// without telling us (review SEC-7).
+    var isOnDemand: Bool { manager.isEnabled && manager.isOnDemandEnabled }
+    /// On-demand is switched on, running or paused: what disconnecting or switching clears, so
+    /// approval prompts check this, not `isOnDemand` (security-6 L3).
+    var hasOnDemandSetting: Bool { manager.isOnDemandEnabled }
+    /// On-demand is switched on here, but another VPN configuration took over (SEC-7).
+    var isOnDemandPaused: Bool { manager.isOnDemandEnabled && !manager.isEnabled }
+    /// The kill switch is holding traffic in the tunnel right now.
+    var isKillSwitchActive: Bool { isActive && proto?.includeAllNetworks == true }
     var connectedSince: Date? {
         #if DEBUG
         if demoStatus != nil { return status == .connected ? demoSince : nil }
@@ -67,15 +101,31 @@ final class Tunnel: ObservableObject, Identifiable {
         findings = ConfigReview.review(config)
         self.stats = stats
     }
+    func setDemo(status: NEVPNStatus, profile: OpenConnectProfile, stats: RuntimeStats?, since: Date?) {
+        demoStatus = status
+        demoSince = since
+        self.status = status
+        self.profile = profile
+        self.stats = stats
+    }
     #endif
 
     /// Loads the app's keychain copy for display (public keys, addresses). Keys are rendered
     /// only after authentication.
     func loadConfiguration() {
-        guard let reference = proto?.passwordReference else { configuration = nil; findings = []; return }
-        configuration = (try? ConfigKeychain.read(reference)).flatMap { WgQuick.parse($0).configuration }
+        guard let reference = proto?.passwordReference else { configuration = nil; profile = nil; findings = []; return }
+        let text = try? ConfigKeychain.read(reference)
+        if isOpenConnect {
+            profile = text.flatMap { OpenConnectFile.parse($0).profile }
+            clientCertificateName = profile?.clientCertificate.map { ClientIdentities.item(sha256: $0)?.name ?? "" }
+            return
+        }
+        configuration = text.flatMap { WgQuick.parse($0).configuration }
         findings = configuration.map(ConfigReview.review) ?? []
     }
+
+    /// The saved text (wg-quick or the AnyConnect profile), from the keychain.
+    var savedText: String? { proto?.passwordReference.flatMap { try? ConfigKeychain.read($0) } }
 
     var statusText: String {
         switch status {
@@ -108,6 +158,17 @@ final class TunnelStore: ObservableObject {
     @Published var loadError: String?
 
     private let log = Logger(subsystem: AppIdentity.logSubsystem, category: "app")
+    /// Called when an AnyConnect VPN exists, so the app activates the OpenConnect extension.
+    var needsOpenConnect: (() -> Void)?
+    /// Why the OpenConnect extension can't run yet (not approved, not in /Applications), or nil.
+    /// Asked before a sign-in, so nobody approves a Duo push for a connect that can't start
+    /// (quality-6 M3).
+    var openConnectBlocker: (() async -> String?)?
+    private var openConnectRequested = false
+    /// Runs an AnyConnect sign-in with the user (the app's sign-in window).
+    var signIn: ((Tunnel, OpenConnectProfile) async throws -> AnyConnectSession)?
+    /// Asks whether to pin a certificate macOS doesn't trust (see SignInCoordinator).
+    var confirmTrust: ((_ host: String, _ sha256: String, _ reason: String) -> Bool)?
     private var statusObserver: NSObjectProtocol?
     private var configObserver: NSObjectProtocol?
     private var statsTimer: Timer?
@@ -134,6 +195,8 @@ final class TunnelStore: ObservableObject {
                 // The extension runs (or just refused an outdated copy): deliver what waited for it.
                 if !self.pendingHandOff.isEmpty { Task { await self.syncToExtension() } }
                 if tunnel.status == .disconnected { tunnel.stats = nil }  // no stale counters (Q2-L4)
+                // A tunnel that was connected at launch gets the 1.2.0 migration now (quality-6 M1).
+                if tunnel.status == .disconnected, !self.neutralizedServers { Task { await self.neutralizeServerAddresses() } }
                 // A start that fails ends in .disconnected; the extension's reason (for example
                 // the kill-switch DNS message) is only available from the connection.
                 if before == .connecting, tunnel.status == .disconnected {
@@ -208,7 +271,7 @@ final class TunnelStore: ObservableObject {
             var next: [Tunnel] = []
             for manager in managers {
                 guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
-                      proto.providerBundleIdentifier == AppIdentity.extensionBundleID,
+                      [AppIdentity.extensionBundleID, AppIdentity.openConnectExtensionBundleID].contains(proto.providerBundleIdentifier),
                       let id = (proto.providerConfiguration?[ProviderConfigKey.tunnelID] as? String).flatMap(UUID.init) else { continue }
                 // Another account's tunnel (configurations are system-wide): not ours to show,
                 // start or change. Tunnels from before the owner was recorded count as ours only
@@ -230,11 +293,17 @@ final class TunnelStore: ObservableObject {
                 }
             }
             tunnels = next.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            // The OpenConnect extension is activated only once there is a VPN that needs it.
+            if !openConnectRequested, tunnels.contains(where: \.isOpenConnect) {
+                openConnectRequested = true  // once per launch; adding a VPN or connecting asks again (Q5-L12)
+                needsOpenConnect?()
+            }
             // Forget queued hand-offs of tunnels that no longer exist (removed elsewhere, or a
             // failed add), so nothing waits for them forever (quality-3).
             let existing = Set(tunnels.map(\.id))
             if !pendingHandOff.isSubset(of: existing) { pendingHandOff.formIntersection(existing) }
             loadError = nil
+            if !neutralizedServers { Task { await neutralizeServerAddresses() } }
         } catch {
             loadError = error.localizedDescription
             log.error("Loading tunnels failed: \(error.localizedDescription, privacy: .public)")
@@ -277,13 +346,17 @@ final class TunnelStore: ObservableObject {
 
     private func syncPass() async {
         let pending = pendingHandOff
+        // Each extension on its own: one that isn't running must not hold up the other.
+        var skipped = Set<ExtensionSecrets.Engine>()
         for tunnel in tunnels {
             await stampOwner(tunnel)
-            switch await ExtensionSecrets.has(id: tunnel.id, revision: Self.revision(tunnel)) {
+            guard !skipped.contains(tunnel.engine) else { continue }
+            switch await ExtensionSecrets.has(tunnel.engine, id: tunnel.id, revision: Self.revision(tunnel)) {
             case .notRunning:  // normal: it runs only with a tunnel
                 retryWhilePending()
-                return
-            case .failed(let message): extensionProblem = message; return
+                skipped.insert(tunnel.engine)
+                continue
+            case .failed(let message): extensionProblem = message; skipped.insert(tunnel.engine); continue
             case .yes:  // current already
                 extensionProblem = nil
                 if pending.contains(tunnel.id) { pendingHandOff.remove(tunnel.id) }
@@ -293,7 +366,7 @@ final class TunnelStore: ObservableObject {
             do {
                 try await handOff(tunnel)
             } catch let failure as ExtensionSecrets.Failure where failure.unreachable {
-                return
+                skipped.insert(tunnel.engine)
             } catch {
                 tunnel.lastError = error.localizedDescription
             }
@@ -302,8 +375,10 @@ final class TunnelStore: ObservableObject {
         // Settings, would otherwise stay in its store forever. Only after a clean load: a failed
         // load must not look like "no tunnels".
         if loaded, loadError == nil {
-            let removed = await ExtensionSecrets.prune(keeping: tunnels.map(\.id))
-            if removed > 0 { log.notice("The extension dropped \(removed, privacy: .public) orphaned configuration(s)") }
+            for engine in [ExtensionSecrets.Engine.wireGuard, .openConnect] where !skipped.contains(engine) {
+                let removed = await ExtensionSecrets.prune(engine, keeping: tunnels.filter { $0.engine == engine }.map(\.id))
+                if removed > 0 { log.notice("The \(engine.name, privacy: .public) dropped \(removed, privacy: .public) orphaned configuration(s)") }
+            }
         }
     }
 
@@ -339,6 +414,7 @@ final class TunnelStore: ObservableObject {
     /// configuration (macOS asks the user to allow VPN configurations the first time).
     @discardableResult
     func add(name requested: String, text: String) async throws -> Tunnel {
+        if OpenConnectFile.looksLikeProfile(text) { return try await addOpenConnect(name: requested, text: text) }
         let parsed = WgQuick.parse(text)
         guard let config = parsed.configuration else {
             throw StoreError.invalid(parsed.errors.map(\.description).joined(separator: "\n"))
@@ -348,7 +424,7 @@ final class TunnelStore: ObservableObject {
         let reference = try ConfigKeychain.store(text, tunnelID: id, name: name)
         let revision = UUID().uuidString
         do {
-            try await ExtensionSecrets.store(id: id, text: text, revision: revision)
+            try await ExtensionSecrets.store(.wireGuard, id: id, text: text, revision: revision)
         } catch let failure as ExtensionSecrets.Failure where failure.unreachable {
             pendingHandOff.insert(id)  // handed over when the extension next runs
         } catch {
@@ -361,7 +437,8 @@ final class TunnelStore: ObservableObject {
         proto.passwordReference = reference  // the app's own copy; the extension never reads it
         proto.providerConfiguration = [ProviderConfigKey.formatVersion: 1, ProviderConfigKey.tunnelID: id.uuidString,
                                        ProviderConfigKey.ownerUID: NSNumber(value: getuid()),
-                                       ProviderConfigKey.revision: revision]
+                                       ProviderConfigKey.revision: revision,
+                                       ProviderConfigKey.onDemand: false]
         proto.serverAddress = Self.serverAddress(config)
         // Tunnels that carry most traffic default to the kill switch with the LAN blocked:
         // TunnelVision (CVE-2024-3661) and TunnelCrack LocalNet (CVE-2023-36672) both abuse
@@ -370,19 +447,59 @@ final class TunnelStore: ObservableObject {
             proto.includeAllNetworks = true
             proto.excludeLocalNetworks = false
         }
+        return try await save(proto, name: name, id: id, reference: reference)
+    }
 
+    /// Saves a new AnyConnect VPN. Its profile holds no secret; the extension gets a copy so it
+    /// knows the gateway and the certificate pin, and a session at each connect.
+    @discardableResult
+    func addOpenConnect(name requested: String, text: String) async throws -> Tunnel {
+        let parsed = OpenConnectFile.parse(text)
+        guard let profile = parsed.profile else {
+            throw StoreError.invalid(parsed.errors.map(\.description).joined(separator: "\n"))
+        }
+        needsOpenConnect?()
+        let name = TunnelName.unique(TunnelName.sanitize(requested), existing: tunnels.map(\.name))
+        let id = UUID()
+        let canonical = OpenConnectFile.serialize(profile)
+        let reference = try ConfigKeychain.store(canonical, tunnelID: id, name: name, kind: .openConnect)
+        let revision = UUID().uuidString
+        do {
+            try await ExtensionSecrets.store(.openConnect, id: id, text: canonical, revision: revision)
+        } catch let failure as ExtensionSecrets.Failure where failure.unreachable {
+            pendingHandOff.insert(id)
+        } catch {
+            ConfigKeychain.delete(reference)
+            throw error
+        }
+        let proto = NETunnelProviderProtocol()
+        proto.providerBundleIdentifier = AppIdentity.openConnectExtensionBundleID
+        proto.passwordReference = reference
+        proto.providerConfiguration = [ProviderConfigKey.formatVersion: 1, ProviderConfigKey.tunnelID: id.uuidString,
+                                       ProviderConfigKey.ownerUID: NSNumber(value: getuid()),
+                                       ProviderConfigKey.revision: revision,
+                                       ProviderConfigKey.onDemand: false]
+        proto.serverAddress = Self.neutralServerAddress  // SEC-9
+        // The gateway decides the routes when it connects, so the kill switch starts off: with a
+        // split-tunnel VPN it would send everything to a gateway that drops it. Users turn it on
+        // per VPN when the gateway takes all traffic.
+        return try await save(proto, name: name, id: id, reference: reference)
+    }
+
+    private func save(_ proto: NETunnelProviderProtocol, name: String, id: UUID, reference: Data) async throws -> Tunnel {
         let manager = NETunnelProviderManager()
         manager.localizedDescription = name
         manager.protocolConfiguration = proto
         // Only one of our configurations is enabled at a time; enabling a new one would silently
         // switch off the on-demand rules of the current one. connect() enables it when used.
         manager.isEnabled = tunnels.isEmpty
+        let engine: ExtensionSecrets.Engine = proto.providerBundleIdentifier == AppIdentity.openConnectExtensionBundleID ? .openConnect : .wireGuard
         do {
             try await manager.saveToPreferences()
         } catch {
             ConfigKeychain.delete(reference)
             pendingHandOff.remove(id)
-            try? await ExtensionSecrets.remove(id: id)
+            try? await ExtensionSecrets.remove(engine, id: id)
             throw error
         }
         log.notice("Added tunnel \(name, privacy: .public)")
@@ -391,10 +508,22 @@ final class TunnelStore: ObservableObject {
     }
 
     /// Replaces a tunnel's config text (and optionally its name).
-    func update(_ tunnel: Tunnel, name: String? = nil, text: String) async throws {
-        let parsed = WgQuick.parse(text)
-        guard let config = parsed.configuration else {
-            throw StoreError.invalid(parsed.errors.map(\.description).joined(separator: "\n"))
+    func update(_ tunnel: Tunnel, name: String? = nil, text requested: String) async throws {
+        var text = requested
+        let server: String
+        if tunnel.isOpenConnect {
+            let parsed = OpenConnectFile.parse(text)
+            guard let profile = parsed.profile else {
+                throw StoreError.invalid(parsed.errors.map(\.description).joined(separator: "\n"))
+            }
+            text = OpenConnectFile.serialize(profile)
+            server = Self.neutralServerAddress
+        } else {
+            let parsed = WgQuick.parse(text)
+            guard let config = parsed.configuration else {
+                throw StoreError.invalid(parsed.errors.map(\.description).joined(separator: "\n"))
+            }
+            server = Self.serverAddress(config)
         }
         try await tunnel.manager.loadFromPreferences()
         guard let proto = tunnel.proto else { throw StoreError.invalid("Tunnel has no protocol configuration") }
@@ -410,16 +539,16 @@ final class TunnelStore: ObservableObject {
             throw StoreError.invalid("The keychain item for this tunnel is missing; delete and re-import it")
         }
 
-        let reference = try ConfigKeychain.store(text, tunnelID: tunnel.id, name: newName)
+        let reference = try ConfigKeychain.store(text, tunnelID: tunnel.id, name: newName, kind: tunnel.kind)
         var deferred = false
         do {
             do {
-                try await ExtensionSecrets.store(id: tunnel.id, text: text, revision: revision)
+                try await ExtensionSecrets.store(tunnel.engine, id: tunnel.id, text: text, revision: revision)
             } catch let failure as ExtensionSecrets.Failure where failure.unreachable {
                 deferred = true  // the extension keeps the old copy until it runs again
             }
             proto.passwordReference = reference
-            proto.serverAddress = Self.serverAddress(config)
+            proto.serverAddress = server
             var providerConfiguration = proto.providerConfiguration ?? [:]
             providerConfiguration[ProviderConfigKey.revision] = revision
             proto.providerConfiguration = providerConfiguration
@@ -435,7 +564,7 @@ final class TunnelStore: ObservableObject {
             if !deferred {
                 // If even the rollback fails, the extension holds the rejected text: re-send the
                 // current one at the next chance (the revisions differ, so it won't start; S3-L2).
-                do { try await ExtensionSecrets.store(id: tunnel.id, text: oldText, revision: oldRevision) } catch { pendingHandOff.insert(tunnel.id) }
+                do { try await ExtensionSecrets.store(tunnel.engine, id: tunnel.id, text: oldText, revision: oldRevision) } catch { pendingHandOff.insert(tunnel.id) }
             }
             throw error
         }
@@ -451,8 +580,9 @@ final class TunnelStore: ObservableObject {
         try await tunnel.manager.removeFromPreferences()
         if let reference { ConfigKeychain.delete(reference) }
         pendingHandOff.remove(tunnel.id)
+        if tunnel.isOpenConnect { await SSODataStore.remove(tunnel.id) }  // its sign-in cookies
         do {
-            try await ExtensionSecrets.remove(id: tunnel.id)
+            try await ExtensionSecrets.remove(tunnel.engine, id: tunnel.id)
         } catch {
             // The tunnel is gone either way; syncToExtension prunes the extension's copy the
             // next time the extension is reachable.
@@ -477,18 +607,51 @@ final class TunnelStore: ObservableObject {
         await reload()
     }
 
-    /// What System Settings shows under the VPN's "Server" field.
-    private static func serverAddress(_ c: TunnelConfiguration) -> String {
-        switch c.peers.count {
-        case 0: return "No peers"
-        case 1: return c.peers[0].endpoint?.description ?? "No endpoint"
-        default: return "\(c.peers.count) peers"
+    /// What System Settings shows under the VPN's "Server" field. The same for every tunnel: the
+    /// VPN preferences file is readable by every account, and an endpoint identifies the server
+    /// to a censor (review SEC-9). Wombat shows the real server itself.
+    static let neutralServerAddress = "Wombat"
+    private static func serverAddress(_ c: TunnelConfiguration) -> String { neutralServerAddress }
+
+    /// Sets on-demand and its mirror in providerConfiguration, which the extension reads.
+    static func setOnDemandEnabled(_ manager: NETunnelProviderManager, _ on: Bool) {
+        manager.isOnDemandEnabled = on
+        guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else { return }
+        var configuration = proto.providerConfiguration ?? [:]
+        configuration[ProviderConfigKey.onDemand] = on
+        proto.providerConfiguration = configuration
+    }
+
+    /// Tunnels saved before 1.2.0 still name their server in the shared preferences file (SEC-9)
+    /// and lack the on-demand mirror (SEC-2).
+    private var neutralizedServers = false
+    private func neutralizeServerAddresses() async {
+        guard !neutralizedServers else { return }
+        neutralizedServers = true
+        for tunnel in tunnels {
+            guard let proto = tunnel.proto else { continue }
+            let mirrored = proto.providerConfiguration?[ProviderConfigKey.onDemand] as? Bool
+            guard proto.serverAddress != Self.neutralServerAddress || mirrored != tunnel.manager.isOnDemandEnabled else { continue }
+            // Saving a connected tunnel's configuration could restart it: leave it for a later
+            // reload, after it disconnects.
+            if tunnel.isActive { neutralizedServers = false; continue }
+            do {
+                try await tunnel.manager.loadFromPreferences()
+                tunnel.proto?.serverAddress = Self.neutralServerAddress
+                Self.setOnDemandEnabled(tunnel.manager, tunnel.manager.isOnDemandEnabled)
+                try await tunnel.manager.saveToPreferences()
+            } catch {
+                log.error("Could not update the Server field of a tunnel: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
     // MARK: Connecting
 
-    func connect(_ tunnel: Tunnel, source: String = "the app") async throws {
+    /// `approved`: for a CLI connect, the tunnels the user agreed to interrupt (nil: the user
+    /// acted in the app).
+    func connect(_ tunnel: Tunnel, source: String = "the app", approved: Set<UUID>? = nil) async throws {
+        if tunnel.isOpenConnect { return try await connectOpenConnect(tunnel, source: source, approved: approved) }
         // Look the endpoints up first: once another tunnel's kill switch is being torn down, or
         // this one's starts, the system resolver may be blocked (audit Q2-M2).
         let endpoints = await resolvedEndpoints(tunnel)
@@ -497,7 +660,7 @@ final class TunnelStore: ObservableObject {
         for other in tunnels where other !== tunnel {
             if other.manager.isOnDemandEnabled {
                 try? await other.manager.loadFromPreferences()
-                other.manager.isOnDemandEnabled = false
+                Self.setOnDemandEnabled(other.manager, false)
                 try? await other.manager.saveToPreferences()
             }
             if other.isActive { other.manager.connection.stopVPNTunnel() }
@@ -515,7 +678,7 @@ final class TunnelStore: ObservableObject {
         // Make sure the extension starts from the current configuration. If it isn't running,
         // this start launches it, and it waits for the hand-off below (StartOption.awaitHandOff).
         let wakesExtension: Bool
-        switch await ExtensionSecrets.has(id: tunnel.id, revision: Self.revision(tunnel)) {
+        switch await ExtensionSecrets.has(.wireGuard, id: tunnel.id, revision: Self.revision(tunnel)) {
         case .notRunning:
             wakesExtension = true
             options[StartOption.awaitHandOff] = true as NSNumber
@@ -533,6 +696,85 @@ final class TunnelStore: ObservableObject {
         if wakesExtension { Task { await handOffAfterLaunch(tunnel) } }
     }
 
+    /// An AnyConnect connect: sign in first (the user's forms or SSO; the current tunnel keeps
+    /// running meanwhile, so a canceled sign-in changes nothing), then switch tunnels, hand the
+    /// profile and the session to the OpenConnect extension, and start.
+    private func connectOpenConnect(_ tunnel: Tunnel, source: String, approved: Set<UUID>?) async throws {
+        guard var profile = tunnel.profile else { throw StoreError.invalid("The keychain item for this VPN is missing; delete and re-add it") }
+        guard let signIn else { throw StoreError.invalid("Sign-in isn't available") }
+        needsOpenConnect?()
+        if let blocker = await openConnectBlocker?() { throw StoreError.invalid(blocker) }
+        var revisionAtStart = Self.revision(tunnel)
+        let session: AnyConnectSession
+        do {
+            session = try await signIn(tunnel, profile)
+        } catch AnyConnectSignInError.untrustedServer(let host, let sha256, let reason) {
+            // The user may pin the certificate after checking its fingerprint; then once more.
+            // Only the profile's own gateway: a redirect target can't be pinned for it (S5-L7).
+            guard host.lowercased() == profile.host.lowercased(), confirmTrust?(host, sha256, reason) == true else { throw AnyConnectSignInError.untrustedServer(host: host, sha256: sha256, reason: reason) }
+            profile.serverCertificate = sha256
+            try await update(tunnel, text: OpenConnectFile.serialize(profile))
+            revisionAtStart = Self.revision(tunnel)  // our own edit, not one made during the sign-in
+            session = try await signIn(tunnel, profile)
+        }
+        // The sign-in took minutes, maybe: re-check what was decided before it (S5B-M3).
+        try? await tunnel.manager.loadFromPreferences()
+        if Self.revision(tunnel) != revisionAtStart {
+            throw StoreError.invalid("This VPN was edited during the sign-in; connect again to use the new settings")
+        }
+        if let approved {
+            let affected = tunnels.filter { $0 !== tunnel && ($0.hasOnDemandSetting || $0.isKillSwitchActive) }
+            if !Set(affected.map(\.id)).isSubset(of: approved) {
+                throw StoreError.invalid("Another tunnel with on-demand or the kill switch came up during the sign-in; run the command again to approve switching")
+            }
+        }
+        for other in tunnels where other !== tunnel {
+            if other.manager.isOnDemandEnabled {
+                try? await other.manager.loadFromPreferences()
+                Self.setOnDemandEnabled(other.manager, false)
+                try? await other.manager.saveToPreferences()
+            }
+            if other.isActive { other.manager.connection.stopVPNTunnel() }
+        }
+        // Reconnecting (after an edit): the old session ends only now that the new one is in
+        // hand, and before it is handed over (the extension's stop drops its session) (Q5-M8).
+        if tunnel.isActive {
+            tunnel.manager.connection.stopVPNTunnel()
+            for _ in 0..<80 where tunnel.status != .disconnected {
+                try? await Task.sleep(for: .milliseconds(100))
+                tunnel.refreshStatus()
+            }
+        }
+        try await tunnel.manager.loadFromPreferences()
+        if !tunnel.manager.isEnabled {
+            tunnel.manager.isEnabled = true
+            try await tunnel.manager.saveToPreferences()
+            try await tunnel.manager.loadFromPreferences()
+        }
+        var options: [String: NSObject] = [StartOption.source: source as NSString]
+        // The revision the sign-in was made for, not whatever is current now: an edit landing
+        // after the check above gives the extension a different revision, and it refuses to start
+        // the old session with the new profile (fails closed; S5C-M5).
+        let revision = revisionAtStart
+        var wakesExtension = false
+        switch await ExtensionSecrets.has(.openConnect, id: tunnel.id, revision: revision) {
+        case .notRunning:
+            wakesExtension = true
+            options[StartOption.awaitHandOff] = true as NSNumber
+        case .failed(let message):
+            throw ExtensionSecrets.Failure(errorDescription: message)
+        case .no:
+            try await handOff(tunnel)
+            try await ExtensionSecrets.storeSession(id: tunnel.id, revision: revision, session: session)
+        case .yes:
+            pendingHandOff.remove(tunnel.id)
+            try await ExtensionSecrets.storeSession(id: tunnel.id, revision: revision, session: session)
+        }
+        try tunnel.manager.connection.startVPNTunnel(options: options)
+        tunnel.lastError = nil
+        if wakesExtension { Task { await handOffAfterLaunch(tunnel, session: session, revision: revision) } }
+    }
+
     private static func revision(_ tunnel: Tunnel) -> String {
         tunnel.proto?.providerConfiguration?[ProviderConfigKey.revision] as? String ?? ""
     }
@@ -542,18 +784,21 @@ final class TunnelStore: ObservableObject {
         guard let reference = tunnel.proto?.passwordReference, let text = try? ConfigKeychain.read(reference) else {
             throw StoreError.invalid("The keychain item for this tunnel is missing; delete and re-import it")
         }
-        try await ExtensionSecrets.store(id: tunnel.id, text: text, revision: Self.revision(tunnel))
+        try await ExtensionSecrets.store(tunnel.engine, id: tunnel.id, text: text, revision: Self.revision(tunnel))
         pendingHandOff.remove(tunnel.id)
         log.notice("Handed \(tunnel.name, privacy: .public) to the extension")
     }
 
     /// The start just launched the extension: hand over as soon as it answers (it waits up to
     /// 10 s), then catch up on anything else that was waiting.
-    private func handOffAfterLaunch(_ tunnel: Tunnel) async {
+    private func handOffAfterLaunch(_ tunnel: Tunnel, session: AnyConnectSession? = nil, revision: String? = nil) async {
         for _ in 0..<36 {
             try? await Task.sleep(for: .milliseconds(250))
             do {
                 try await handOff(tunnel)
+                // The revision the session was signed for, not whatever is current now (S5D-M1):
+                // if the profile was edited meanwhile, the extension refuses the mismatch.
+                if let session { try await ExtensionSecrets.storeSession(id: tunnel.id, revision: revision ?? Self.revision(tunnel), session: session) }
                 await syncToExtension()
                 return
             } catch let failure as ExtensionSecrets.Failure where failure.unreachable {
@@ -565,15 +810,15 @@ final class TunnelStore: ObservableObject {
             }
         }
         log.error("The extension did not start within 9 s")
-        tunnel.lastError = ExtensionSecrets.notRunning
-        announceFailure(tunnel, ExtensionSecrets.Failure(errorDescription: ExtensionSecrets.notRunning))
+        tunnel.lastError = ExtensionSecrets.notRunningMessage(tunnel.engine)
+        announceFailure(tunnel, ExtensionSecrets.Failure(errorDescription: tunnel.lastError))
     }
 
     /// Looks up the tunnel's endpoint hostnames now, while nothing blocks the system resolver, so
     /// the extension can start with the kill switch on (see `StartOption.endpoints`). A name that
     /// doesn't resolve is left out; the extension then tries its own lookup or its cache.
     private func resolvedEndpoints(_ tunnel: Tunnel) async -> [String: [String]]? {
-        guard let reference = tunnel.proto?.passwordReference,
+        guard !tunnel.isOpenConnect, let reference = tunnel.proto?.passwordReference,
               let text = try? ConfigKeychain.read(reference),
               let config = WgQuick.parse(text).configuration else { return nil }
         let hosts = Set(config.peers.compactMap(\.endpoint).filter(\.isHostname).map(\.hostString))
@@ -592,7 +837,7 @@ final class TunnelStore: ObservableObject {
         // user means by "disconnect" in the app. (CLI callers get an approval prompt first.)
         if tunnel.manager.isOnDemandEnabled {
             try await tunnel.manager.loadFromPreferences()
-            tunnel.manager.isOnDemandEnabled = false
+            Self.setOnDemandEnabled(tunnel.manager, false)
             try await tunnel.manager.saveToPreferences()
         }
         tunnel.manager.connection.stopVPNTunnel()
@@ -601,6 +846,8 @@ final class TunnelStore: ObservableObject {
     func toggle(_ tunnel: Tunnel) async {
         do {
             if tunnel.isActive { try await disconnect(tunnel) } else { try await connect(tunnel) }
+        } catch AnyConnectSignInError.canceled {
+            // A cancel the user chose isn't a failure (A5-M6).
         } catch {
             tunnel.lastError = error.localizedDescription
             announceFailure(tunnel, error)
@@ -609,6 +856,12 @@ final class TunnelStore: ObservableObject {
 
     /// Stops and restarts a tunnel to apply a new configuration.
     func reconnect(_ tunnel: Tunnel) async {
+        if tunnel.isOpenConnect {
+            do { try await connect(tunnel) } catch AnyConnectSignInError.canceled {
+                // Canceled: the VPN keeps running on its current session.
+            } catch { tunnel.lastError = error.localizedDescription; announceFailure(tunnel, error) }
+            return
+        }
         tunnel.manager.connection.stopVPNTunnel()
         for _ in 0..<50 where tunnel.status != .disconnected {
             try? await Task.sleep(for: .milliseconds(100))
@@ -620,16 +873,20 @@ final class TunnelStore: ObservableObject {
     // MARK: On-demand, protection
 
     func setOnDemand(_ tunnel: Tunnel, _ settings: Control.OnDemand) async throws {
+        // Each AnyConnect connect needs the user to sign in, which macOS can't do on its own.
+        if tunnel.isOpenConnect && settings.enabled {
+            throw StoreError.invalid("AnyConnect VPNs can't connect on demand: each connect needs a sign-in")
+        }
         try await tunnel.manager.loadFromPreferences()
         tunnel.manager.onDemandRules = settings.neRules()
-        tunnel.manager.isOnDemandEnabled = settings.enabled
+        Self.setOnDemandEnabled(tunnel.manager, settings.enabled)
         // Rules only run for the enabled configuration.
         if settings.enabled { tunnel.manager.isEnabled = true }
         try await tunnel.manager.saveToPreferences()
         if settings.enabled {
             for other in tunnels where other !== tunnel && other.manager.isOnDemandEnabled {
                 try? await other.manager.loadFromPreferences()
-                other.manager.isOnDemandEnabled = false
+                Self.setOnDemandEnabled(other.manager, false)
                 try? await other.manager.saveToPreferences()
             }
         }
@@ -654,8 +911,14 @@ final class TunnelStore: ObservableObject {
         #endif
         guard tunnel.status == .connected || tunnel.status == .reasserting,
               let session = tunnel.manager.connection as? NETunnelProviderSession,
-              let reply = await send(.runtimeConfiguration, to: session) else { return nil }
-        let stats = RuntimeStats.parse(uapi: String(decoding: reply, as: UTF8.self))
+              let reply = await send(tunnel.isOpenConnect ? .openConnectStatus : .runtimeConfiguration, to: session) else { return nil }
+        let stats: RuntimeStats
+        if tunnel.isOpenConnect {
+            guard let status = try? JSONDecoder().decode(OpenConnectStatus.self, from: reply) else { return nil }
+            stats = RuntimeStats(openConnect: status)
+        } else {
+            stats = RuntimeStats.parse(uapi: String(decoding: reply, as: UTF8.self))
+        }
         tunnel.stats = stats
         return stats
     }

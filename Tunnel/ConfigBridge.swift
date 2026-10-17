@@ -56,8 +56,8 @@ enum ConfigBridge {
         }
         let result = TunnelConfiguration(name: name, interface: interface, peers: peers)
         let coverage = c.coverage
-        result.blockUncoveredIPv6 = coverage.routesMostIPv4 && !coverage.routesMostIPv6
-        result.blockUncoveredIPv4 = coverage.routesMostIPv6 && !coverage.routesMostIPv4
+        result.blockUncoveredIPv6 = coverage.blocksUncoveredIPv6
+        result.blockUncoveredIPv4 = coverage.blocksUncoveredIPv4
         return result
     }
 

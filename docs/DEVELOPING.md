@@ -14,6 +14,9 @@
 
 - macOS 15+, Xcode 26+ (signed in to an Apple developer team), [XcodeGen](https://github.com/yonaskolb/XcodeGen), Go
 - `brew install go xcodegen`
+- For the OpenConnect extension: nothing extra. `scripts/build-openconnect.sh` (a build phase)
+  downloads openconnect and OpenSSL once, checks their SHA-256 pins and builds them with the
+  Xcode toolchain (a few minutes the first time; see [Vendor/openconnect/WOMBAT.md](../Vendor/openconnect/WOMBAT.md))
 
 The team ID is set in `project.yml` (`DEVELOPMENT_TEAM`). Xcode creates the provisioning profiles
 (Network Extension and System Extension capabilities) with `-allowProvisioningUpdates`; if it
@@ -97,8 +100,13 @@ One-time setup:
   Its public half is `SUPublicEDKey` in `App/Info.plist`; the script refuses to publish if they
   differ. Back up the private key (`generate_keys --account wombat -x <file>`): without it, no
   installed copy will ever accept another update.
-- **Cloudflare:** `~/.config/cloudflare/.env` with `CLOUDFLARE_ADMIN_TOKEN`; the scripts pass only
-  the token to a pinned wrangler.
+- **Cloudflare:** `~/.config/cloudflare/.env` with `CLOUDFLARE_ADMIN_TOKEN`, or better a
+  `WOMBAT_R2_TOKEN` limited to the R2 bucket (used first when set). The scripts pass only that
+  token to wrangler, which `scripts/lib-wrangler.sh` installs from `scripts/tools/package-lock.json`
+  with `npm ci --ignore-scripts` (into `build/tools`). To bump wrangler, change the version in
+  `scripts/tools/package.json` and run `npm install --package-lock-only --ignore-scripts` there.
+- **Sparkle** is pinned by commit in `project.yml` (`revision:`), since `Package.resolved` isn't
+  committed. To bump it, use the new tag's commit (`git ls-remote https://github.com/sparkle-project/Sparkle refs/tags/<tag>`).
 - **Versions:** bump `MARKETING_VERSION` per release and `CURRENT_PROJECT_VERSION` per build.
   Sparkle orders updates by the build number, so the script refuses one that isn't above the
   published feed.
@@ -116,7 +124,8 @@ shows the update dot.
 (cd Packages/TunnelCore && swift test)
 ```
 
-TunnelCore holds all the pure logic (parser, review, stats, zip, CLI protocol) and its tests.
+TunnelCore holds all the pure logic (parser, review, stats, zip, CLI protocol, the AnyConnect
+profile, XML protocol, sign-in and network plan) and its tests.
 Zip fixtures are made with `/usr/bin/zip` and the X25519 test vector was checked against Python's
 `cryptography`, so the tests don't verify the code with itself.
 
@@ -140,6 +149,21 @@ it with `docker exec wombat-test-peer awg show`. To see the obfuscation on the w
 the container with `tcpdump -i eth0 -x udp port 51820`: the handshake starts with the I1 packet
 and four junk packets, and no packet begins with WireGuard's `01 00 00 00` headers.
 
+### AnyConnect against a local gateway
+
+```bash
+scripts/dev/ocserv-peer.sh up            # ocserv in Docker on 127.0.0.1:4443: password + one-time code
+scripts/dev/ocserv-peer.sh up --cert     # client certificate + password
+scripts/dev/oc-probe.sh                  # Swift sign-in + libopenconnect tunnel phase, no NetworkExtension
+(cd Packages/TunnelCore && WOMBAT_OCSERV_LIVE=1 swift test --filter AnyConnectLive)
+scripts/dev/ocserv-peer.sh otp           # the current one-time code, for signing in by hand
+```
+
+The probe signs in, connects CSTP, runs the main loop on a socket pair, forces a reconnect,
+stops (the gateway logs the BYE), logs off a session that never reached the main loop, and
+checks that a different certificate and an untrusted one are refused. In a Developer ID build,
+import `build/ocserv-peer/wombat-ocserv.anyconnect` and sign in as `test` / `test-password`.
+
 ## Debugging
 
 - `wombat doctor` first.
@@ -155,9 +179,12 @@ and four junk packets, and no packet begins with WireGuard's `01 00 00 00` heade
 | Path | What |
 |---|---|
 | `App/` | SwiftUI app: `Model/` (store, keychain, extension hand-over), `Control/` (CLI socket), `Views/` |
-| `Tunnel/` | The packet tunnel system extension and its root-only `SecretStore` |
+| `Tunnel/` | The WireGuard packet tunnel system extension |
+| `OpenConnect/` | The AnyConnect system extension: libopenconnect wrapper, provider, in-memory sessions |
+| `ExtensionShared/` | Code both extensions compile: the root-only `SecretStore`, the log buffer |
 | `CLI/` | `wombat` |
 | `Shared/` | Identifiers and code-signing requirements used by all three |
 | `Packages/TunnelCore/` | Pure logic and tests |
 | `Vendor/WireGuardKit/` | WireGuardKit + wireguard-go bridge (MIT), with marked changes |
+| `Vendor/openconnect/` | The no-exec stubs, license texts and notes for the libopenconnect build |
 | `scripts/` | Signed build and release, DMG, Go bridge, app and menu bar icons, site publishing, dev tools (`dev/`: test peer, screenshots) |

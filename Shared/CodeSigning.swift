@@ -33,6 +33,7 @@ enum CodeSigning {
 
     static var app: String { requirement(identifier: AppIdentity.appBundleID) }
     static var tunnelExtension: String { requirement(identifier: AppIdentity.extensionBundleID) }
+    static var openConnectExtension: String { requirement(identifier: AppIdentity.openConnectExtensionBundleID) }
     static var cli: String { requirement(identifier: AppIdentity.appBundleID + ".cli") }
 }
 
@@ -51,8 +52,18 @@ enum CodeSigning {
     func prune(keeping ids: [String], reply: @escaping (Int) -> Void)
 }
 
+/// The OpenConnect extension's service: the same write-only store for profiles (which hold no
+/// secret), plus the session token from a sign-in, which it keeps in memory only. Nothing here
+/// returns a profile or a token.
+@objc protocol OpenConnectStoreProtocol: TunnelSecretStoreProtocol {
+    /// Hands over the session from a sign-in (`AnyConnectSession` as JSON) for the tunnel's
+    /// current profile revision. Replies nil on success.
+    func storeSession(id: String, revision: String, session: Data, reply: @escaping (String?) -> Void)
+}
+
 extension AppIdentity {
     /// The extension's Mach service (NEMachServiceName); must start with the app group so the
     /// sandboxed app may look it up.
     static var extensionMachService: String { appGroup + ".tunnel" }
+    static var openConnectMachService: String { appGroup + ".openconnect" }
 }

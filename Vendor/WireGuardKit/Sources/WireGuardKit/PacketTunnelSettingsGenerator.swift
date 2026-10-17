@@ -128,13 +128,16 @@ class PacketTunnelSettingsGenerator {
         // Wombat: leak protection for the address family a full tunnel leaves out. The routes
         // need an interface address of that family to take effect, so a reserved placeholder
         // is used when the config has none (RFC 7600 dummy IPv4, a fixed ULA for IPv6).
-        if tunnelConfiguration.blockUncoveredIPv6 {
-            if ipv6Addresses.isEmpty { ipv6Addresses = [NEIPv6Route(destinationAddress: "fd77:6f6d:6261:7400::1", networkPrefixLength: 128)] }
-            ipv6IncludedRoutes.append(NEIPv6Route.default())
+        // The placeholder also goes in whenever a family has routes but no address (an IPv4-only
+        // Address with AllowedIPs ::/0): without it those routes may not take effect, and that
+        // traffic would leave through the physical interface (review SEC-5).
+        if tunnelConfiguration.blockUncoveredIPv6 { ipv6IncludedRoutes.append(NEIPv6Route.default()) }
+        if tunnelConfiguration.blockUncoveredIPv4 { ipv4IncludedRoutes.append(NEIPv4Route.default()) }
+        if ipv6Addresses.isEmpty && !ipv6IncludedRoutes.isEmpty {
+            ipv6Addresses = [NEIPv6Route(destinationAddress: "fd77:6f6d:6261:7400::1", networkPrefixLength: 128)]
         }
-        if tunnelConfiguration.blockUncoveredIPv4 {
-            if ipv4Addresses.isEmpty { ipv4Addresses = [NEIPv4Route(destinationAddress: "192.0.0.8", subnetMask: "255.255.255.255")] }
-            ipv4IncludedRoutes.append(NEIPv4Route.default())
+        if ipv4Addresses.isEmpty && !ipv4IncludedRoutes.isEmpty {
+            ipv4Addresses = [NEIPv4Route(destinationAddress: "192.0.0.8", subnetMask: "255.255.255.255")]
         }
 
         let ipv4Settings = NEIPv4Settings(addresses: ipv4Addresses.map { $0.destinationAddress }, subnetMasks: ipv4Addresses.map { $0.destinationSubnetMask })

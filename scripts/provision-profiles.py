@@ -41,6 +41,7 @@ TARGETS = [
     # (identifier, display name, capabilities)
     (APP_ID, "Wombat", ["NETWORK_EXTENSIONS", "SYSTEM_EXTENSION_INSTALL"]),
     (APP_ID + ".tunnel", "Wombat Tunnel", ["NETWORK_EXTENSIONS"]),
+    (APP_ID + ".openconnect", "Wombat OpenConnect", ["NETWORK_EXTENSIONS"]),
 ]
 
 

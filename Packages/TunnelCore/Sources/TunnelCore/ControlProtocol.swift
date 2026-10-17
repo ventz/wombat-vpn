@@ -44,7 +44,7 @@ public enum Control {
         public var endpoint: String?
         public var addresses: [String]
         public var connectedSince: Date?
-        /// "wireguard" or "amneziawg". Optional so an older app's reply still decodes.
+        /// "wireguard", "amneziawg" or "anyconnect". Optional so an older app's reply still decodes.
         public var `protocol`: String?
 
         public init(name: String, status: String, onDemand: Bool, endpoint: String?, addresses: [String], connectedSince: Date?) {

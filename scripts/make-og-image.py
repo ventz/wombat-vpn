@@ -44,10 +44,10 @@ icon = Image.open(ROOT / "docs/images/icon.png").convert("RGBA").resize((128, 12
 card.paste(icon, (64, 92), icon)
 d = ImageDraw.Draw(card)
 d.text((64, 250), "Wombat", font=font(92, "Bold"), fill=INK)
-d.text((66, 362), "The modern WireGuard", font=font(38, "Semibold"), fill=INK)
-d.text((66, 408), "client for Mac", font=font(38, "Semibold"), fill=INK)
-d.text((66, 484), "Native · Free · Open source", font=font(26, "Medium"), fill=MUTED)
-d.text((66, 522), "Security first", font=font(26, "Semibold"), fill=RED)
+d.text((66, 362), "WireGuard + Cisco AnyConnect", font=font(34, "Semibold"), fill=INK)
+d.text((66, 404), "for Mac", font=font(34, "Semibold"), fill=INK)
+d.text((66, 470), "The last VPN software you need", font=font(26, "Medium"), fill=MUTED)
+d.text((66, 508), "Native · Free · Security first", font=font(26, "Semibold"), fill=RED)
 
 out = ROOT / "site/og.png"
 card.save(out, optimize=True)

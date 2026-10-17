@@ -101,6 +101,16 @@ private func makeZipForBomb(stored: Bool = false) throws -> Data {
 }
 
 @Suite struct ZipWriterTests {
+    /// A name of heavily combined characters is short in characters but huge in UTF-8; it used to
+    /// trap in UInt16(nameData.count) (review SEC-11).
+    @Test func combiningCharacterNamesDontTrap() throws {
+        let zalgo = String(repeating: "a" + String(repeating: "\u{0301}", count: 1100), count: 64)
+        #expect(TunnelName.sanitize(zalgo).utf8.count > 65_535)  // the case that trapped
+        #expect(ZipWriter.fileName(zalgo).utf8.count <= 255)
+        let data = ZipWriter.archive([ZipWriter.File(name: zalgo, text: "x")])
+        #expect(!data.isEmpty)
+    }
+
     /// Read back with /usr/bin/unzip, an independent implementation, and with our reader.
     @Test func roundTripsThroughUnzipAndReader() throws {
         let files = [ZipWriter.File(name: "Home", text: sample), ZipWriter.File(name: "Home", text: "# second\n"),

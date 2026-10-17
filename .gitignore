@@ -30,6 +30,8 @@ xcuserdata/
 # Tunnel configs contain private keys: never commit real ones
 *.conf
 !**/Fixtures/**/*.conf
+# AnyConnect profiles name usernames and internal gateways
+*.anyconnect
 *.zip
 
 # Screenshots are published to R2, not committed (sources in build/screenshots/raw)

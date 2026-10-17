@@ -16,39 +16,47 @@ struct ConnectionTab: View {
 
     var body: some View {
         Form {
-            Section {
-                Toggle("Connect automatically", isOn: $rules.enabled)
-                Toggle("On Wi-Fi", isOn: $rules.onWiFi).disabled(!rules.enabled)
-                Toggle("On Ethernet", isOn: $rules.onEthernet).disabled(!rules.enabled)
-            } header: {
-                Text("When to connect")
-            } footer: {
-                Text("macOS keeps the tunnel up on these networks, even while Wombat is closed. Turning the tunnel off by hand also turns this off.")
-            }
+            if tunnel.isOpenConnect {
+                Section {
+                    Text("You sign in each time an AnyConnect VPN connects (password, Duo, single sign-on), so macOS can't connect it on its own. Connect it from Wombat, the menu bar or `wombat up`.")
+                } header: {
+                    Text("When to connect")
+                }
+            } else {
+                Section {
+                    Toggle("Connect automatically", isOn: $rules.enabled)
+                    Toggle("On Wi-Fi", isOn: $rules.onWiFi).disabled(!rules.enabled)
+                    Toggle("On Ethernet", isOn: $rules.onEthernet).disabled(!rules.enabled)
+                } header: {
+                    Text("When to connect")
+                } footer: {
+                    Text("macOS keeps the tunnel up on these networks, even while Wombat is closed. Turning the tunnel off by hand also turns this off.")
+                }
 
-            Section {
-                ForEach(rules.trustedSSIDs, id: \.self) { ssid in
-                    HStack {
-                        Label(ssid, systemImage: "wifi")
-                        Spacer()
-                        Button(role: .destructive) { rules.trustedSSIDs.removeAll { $0 == ssid } } label: {
-                            Image(systemName: "minus.circle")
+                Section {
+                    ForEach(rules.trustedSSIDs, id: \.self) { ssid in
+                        HStack {
+                            Label(ssid, systemImage: "wifi")
+                            Spacer()
+                            Button(role: .destructive) { rules.trustedSSIDs.removeAll { $0 == ssid } } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Remove \(ssid)")
                         }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("Remove \(ssid)")
                     }
+                    HStack {
+                        TextField("Wi-Fi network name", text: $newSSID)
+                            .onSubmit(addSSID)
+                        Button("Add", action: addSSID).disabled(newSSID.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                } header: {
+                    Text("Except on these Wi-Fi networks")
+                } footer: {
+                    Text("The tunnel disconnects on these networks, such as home or office. Wi-Fi names are not authenticated: anyone can broadcast the same name, so only trust networks where a disconnected tunnel is acceptable.")
                 }
-                HStack {
-                    TextField("Wi-Fi network name", text: $newSSID)
-                        .onSubmit(addSSID)
-                    Button("Add", action: addSSID).disabled(newSSID.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            } header: {
-                Text("Except on these Wi-Fi networks")
-            } footer: {
-                Text("The tunnel disconnects on these networks, such as home or office. Wi-Fi names are not authenticated: anyone can broadcast the same name, so only trust networks where a disconnected tunnel is acceptable.")
+                .disabled(!rules.enabled)
             }
-            .disabled(!rules.enabled)
 
             Section {
                 Toggle("Kill switch", isOn: $protection.killSwitch)

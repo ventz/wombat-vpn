@@ -29,7 +29,6 @@ readonly NOTARY_PROFILE="${WOMBAT_NOTARY_PROFILE:-ventz-notary}"
 readonly BUCKET="${WOMBAT_BUCKET:-wombat-mac-wireguard-autoupdate}"
 readonly FEED_HOST="${WOMBAT_FEED_HOST:-https://wombat.vpetkov.net}"
 readonly SPARKLE_ACCOUNT="wombat"
-readonly WRANGLER_VERSION="${WOMBAT_WRANGLER_VERSION:-4.133.0}"
 readonly CF_ENV="${WOMBAT_CLOUDFLARE_ENV:-$HOME/.config/cloudflare/.env}"
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -66,20 +65,8 @@ highest_build_in() {
 # and the release then serves it (Moo 0.1.7). A unique query string gets its own cache entry.
 fresh() { printf '%s?cb=%s' "$1" "$(date +%s)"; }
 
-# Pinned, npm install scripts off, and only the token reaches it: this runs on the machine holding
-# the Developer ID key, the notary profile and the Sparkle key.
-wrangler() {
-    (
-        set -a
-        # shellcheck disable=SC1090
-        source "$CF_ENV"
-        set +a
-        env -i HOME="$HOME" PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
-            CLOUDFLARE_API_TOKEN="$CLOUDFLARE_ADMIN_TOKEN" ${CLOUDFLARE_ACCOUNT_ID:+CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID"} \
-            CI=1 WRANGLER_SEND_METRICS=false npm_config_ignore_scripts=true \
-            npx --yes "wrangler@$WRANGLER_VERSION" "$@"
-    )
-}
+# shellcheck source=scripts/lib-wrangler.sh
+source scripts/lib-wrangler.sh  # the working directory is the repo root here
 
 # --- Preflight ----------------------------------------------------------------------------------
 # Every check here fails a release long before notarizing would.
@@ -121,7 +108,10 @@ fi
 
 if [[ $dry_run -eq 0 ]]; then
     [[ -f "$CF_ENV" ]] || { echo "$CF_ENV not found (CLOUDFLARE_ADMIN_TOKEN)" >&2; exit 1; }
-    wrangler whoami >/dev/null 2>&1 || { echo "wrangler can't authenticate with the token in $CF_ENV" >&2; exit 1; }
+    # Reading the feed proves the token can reach the bucket; `whoami` would fail for a token
+    # limited to R2 (WOMBAT_R2_TOKEN; quality-6 L12).
+    wrangler r2 object get "$BUCKET/appcast.xml" --remote --pipe >/dev/null 2>&1 \
+        || { echo "wrangler can't read $BUCKET with the token in $CF_ENV" >&2; exit 1; }
 fi
 
 # A release is built from a commit, so it can be traced and tagged: a real one needs a repository
@@ -349,7 +339,11 @@ github_notes=$(mktemp "${TMPDIR:-/tmp}/wombat-github-notes.XXXXXX")
 
 Download **$dmg_name** below, open it, and drag Wombat to Applications (network extensions only
 run from there). On first launch, allow the extension in System Settings › General › Login Items
-& Extensions. It is signed with a Developer ID, notarized by Apple, and updates itself.
+& Extensions; the first Cisco AnyConnect VPN asks once more, for "Wombat OpenConnect". It is
+signed with a Developer ID, notarized by Apple, and updates itself.
+
+AnyConnect support links OpenConnect (LGPL-2.1) statically; how to rebuild and relink it from
+source is in [Vendor/openconnect/WOMBAT.md](https://github.com/ventz/wombat-wireguard-mac-app/blob/v$version/Vendor/openconnect/WOMBAT.md).
 
 ## Verify
 

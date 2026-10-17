@@ -13,14 +13,16 @@ packages:
   # as Moo; bump on purpose.
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    exactVersion: 2.9.6
+    # 2.9.6 by commit, not by tag: a tag can be moved, and this code runs Sparkle's signing tools
+    # with the EdDSA key (review SEC-8). Package.resolved isn't committed (*.xcodeproj is generated).
+    revision: ac2def288cbff5cfc7df3ffef6abdf45b72bcb0a
 
 settings:
   base:
     DEVELOPMENT_TEAM: 8J9W3ZG4ZN
     CODE_SIGN_STYLE: Automatic
-    MARKETING_VERSION: 1.1.1
-    CURRENT_PROJECT_VERSION: 21
+    MARKETING_VERSION: 1.2.0
+    CURRENT_PROJECT_VERSION: 28
     SWIFT_VERSION: "5.0"
     ENABLE_HARDENED_RUNTIME: YES
     DEAD_CODE_STRIPPING: YES
@@ -54,6 +56,8 @@ targets:
       # from the first configuration, so its copy phase looked for the Debug name in Release.
       - target: WombatTunnel
         embed: false
+      - target: WombatOpenConnect
+        embed: false
       - target: wombat-cli
         embed: true
         codeSign: true
@@ -64,16 +68,19 @@ targets:
       - name: Embed system extension
         script: |
           set -euo pipefail
-          ext="$APP_BUNDLE_ID.tunnel.systemextension"
           dest="$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Library/SystemExtensions"
           mkdir -p "$dest"
-          /bin/rm -rf "$dest/$ext"
-          /usr/bin/ditto "$BUILT_PRODUCTS_DIR/$ext" "$dest/$ext"
+          for ext in "$APP_BUNDLE_ID.tunnel.systemextension" "$APP_BUNDLE_ID.openconnect.systemextension"; do
+            /bin/rm -rf "$dest/$ext"
+            /usr/bin/ditto "$BUILT_PRODUCTS_DIR/$ext" "$dest/$ext"
+          done
         basedOnDependencyAnalysis: false
         inputFiles:
           - $(BUILT_PRODUCTS_DIR)/$(APP_BUNDLE_ID).tunnel.systemextension
+          - $(BUILT_PRODUCTS_DIR)/$(APP_BUNDLE_ID).openconnect.systemextension
         outputFiles:
           - $(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/SystemExtensions/$(APP_BUNDLE_ID).tunnel.systemextension
+          - $(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/SystemExtensions/$(APP_BUNDLE_ID).openconnect.systemextension
     settings:
       base:
         PRODUCT_NAME: $(APP_DISPLAY_NAME)
@@ -92,6 +99,7 @@ targets:
     sources:
       - Tunnel
       - Shared
+      - ExtensionShared
       - path: Vendor/WireGuardKit/Sources/WireGuardKit
       - path: Vendor/WireGuardKit/Sources/WireGuardKitC
         excludes: ["module.modulemap"]
@@ -115,6 +123,47 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Tunnel/Tunnel.entitlements
         SWIFT_OBJC_BRIDGING_HEADER: Tunnel/Tunnel-Bridging-Header.h
         OTHER_LDFLAGS: $(PROJECT_DIR)/build/wg-go/libwg-go.a
+        SKIP_INSTALL: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+  # Cisco AnyConnect tunnels on libopenconnect (LGPL-2.1) + OpenSSL 3.5 LTS. A separate system
+  # extension, so the OpenConnect C code never runs in the process that holds WireGuard keys.
+  WombatOpenConnect:
+    type: system-extension
+    platform: macOS
+    sources:
+      - path: OpenConnect
+        excludes: ["Info.plist", "OpenConnect.entitlements"]
+      - Shared
+      - ExtensionShared
+      # The LGPL and OpenSSL license texts ship with the code they cover.
+      - path: Vendor/openconnect/COPYING.LGPL
+        buildPhase: resources
+      - path: Vendor/openconnect/LICENSE.openssl
+        buildPhase: resources
+    dependencies:
+      - package: TunnelCore
+      - sdk: NetworkExtension.framework
+      - sdk: libxml2.tbd
+      - sdk: libz.tbd
+      - sdk: libiconv.tbd
+    preBuildScripts:
+      - name: Build libopenconnect
+        script: |
+          ARCHS="$ARCHS" MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" "$PROJECT_DIR/scripts/build-openconnect.sh"
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(PROJECT_DIR)/build/openconnect/lib/libopenconnect.a
+    settings:
+      base:
+        PRODUCT_NAME: $(APP_BUNDLE_ID).openconnect
+        PRODUCT_MODULE_NAME: WombatOpenConnect
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).openconnect
+        INFOPLIST_FILE: OpenConnect/Info.plist
+        CODE_SIGN_ENTITLEMENTS: OpenConnect/OpenConnect.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: OpenConnect/OpenConnect-Bridging-Header.h
+        HEADER_SEARCH_PATHS: $(PROJECT_DIR)/build/openconnect/include/openconnect
+        OTHER_LDFLAGS: $(PROJECT_DIR)/build/openconnect/lib/libopenconnect.a $(PROJECT_DIR)/build/openconnect/lib/libssl.a $(PROJECT_DIR)/build/openconnect/lib/libcrypto.a
         SKIP_INSTALL: YES
         ENABLE_USER_SCRIPT_SANDBOXING: NO
 

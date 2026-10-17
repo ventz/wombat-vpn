@@ -12,6 +12,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// tunnel's history to another's log request (audit WOM-14).
     private let recentLog = RecentLog()
     private var handshakeWatch: Task<Void, Never>?
+    private var ownerWatch: ConsoleOwnerWatch?
     /// Set by stopTunnel, so a start still waiting for the hand-off gives up (audit S3-L5).
     private let stateLock = NSLock()
     private var stopped = false
@@ -68,7 +69,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let killSwitch = protocolConfiguration.includeAllNetworks
         do {
             let (id, text) = try loadConfigurationText()
-            try checkOwner(id)
+            try checkOwner(id, options: options)
             // Never start from a copy older than the configuration (fail closed; S3-M1/M2). A copy
             // without a revision (stored before they existed) doesn't match either: the app
             // re-sends it as soon as the extension runs (quality-3).
@@ -112,7 +113,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             var error = TunnelError(adapterError)
             if killSwitch, case .dnsResolution(let hosts) = error { error = .dnsBlockedByKillSwitch(hosts) }
-            self.log.error("Start failed: \(error.localizedDescription, privacy: .public)")
+            // Private: a DNS failure names the endpoint hostnames (review SEC-10).
+            self.log.error("Start failed: \(error.localizedDescription, privacy: .private)")
             self.recentLog.append("Start failed: \(error.localizedDescription)")
             completionHandler(error)
         }
@@ -137,20 +139,43 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    /// VPN configurations are shared by every account on the Mac. A tunnel starts only for the
-    /// user who stored it, or when nobody is logged in at the screen (on-demand at boot); this
-    /// stops another account from bringing up your tunnel with your keys (audit F-3).
-    private func checkOwner(_ id: String) throws {
+    /// VPN configurations are shared by every account on the Mac: see ConsoleOwner (F-3, SEC-2).
+    private func checkOwner(_ id: String, options: [String: NSObject]?) throws {
         guard let owner = SecretStore.shared.owner(of: id) else { return }  // loadConfigurationText already failed otherwise
-        var uid: uid_t = 0
-        if let user = SCDynamicStoreCopyConsoleUser(nil, &uid, nil) as String?, user != "loginwindow", uid != owner {
+        // A tunnel saved before 1.2.0 has no mirror yet (the app adds it once the tunnel is
+        // disconnected): it keeps the old rule, so on-demand at boot still works (quality-6 M1).
+        let onDemand = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?[ProviderConfigKey.onDemand] as? Bool ?? true
+        guard ConsoleOwner.mayStart(owner: owner, onDemandStart: options?[StartOption.source] == nil && onDemand) else {
             throw TunnelError.notOwner
         }
+        guard ConsoleOwner.currentUser() == nil else { return }
+        // Started at the login window: stop when another account takes the screen. No watch, no
+        // start (fail closed; security-6 L5).
+        guard let watch = ConsoleOwnerWatch(owner: owner, onOtherUser: { [weak self] in
+            self?.log.notice("Another user took the screen; stopping the tunnel that started at the login window")
+            self?.recentLog.append("Another user took the screen; stopping the tunnel that started at the login window")
+            self?.cancelTunnelWithError(TunnelError.notOwner)
+        }) else { throw TunnelError.notOwner }
+        // A stop that arrived meanwhile wins, and never leaves a watch running (security-6 L5).
+        let previous: ConsoleOwnerWatch?? = stateLock.withLock {
+            if stopped { return .none }
+            defer { ownerWatch = watch }
+            return .some(ownerWatch)
+        }
+        guard let previous else {
+            watch.cancel()
+            throw TunnelError.canceled
+        }
+        previous?.cancel()
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         stateLock.withLock { stopped = true }
         handshakeWatch?.cancel()
+        stateLock.withLock { () -> ConsoleOwnerWatch? in
+            defer { ownerWatch = nil }
+            return ownerWatch
+        }?.cancel()
         log.notice("Stopping tunnel (reason \(reason.rawValue, privacy: .public))")
         self.recentLog.append("Stopping tunnel (reason \(reason.rawValue))")
         adapter.stop { [weak self] error in
@@ -177,6 +202,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         case .recentLog:
             completionHandler(Data(recentLog.lines().joined(separator: "\n").utf8))
+        case .openConnectStatus:
+            completionHandler(nil)  // the OpenConnect extension's
         }
     }
 
@@ -258,29 +285,5 @@ enum TunnelError: LocalizedError {
         case .invalidState: return "The tunnel is in an unexpected state"
         case .notOwner: return "This tunnel belongs to another user of this Mac"
         }
-    }
-}
-
-/// The last few hundred engine log lines, for the app's log pane. Unified logging has the full
-/// history (`wombat logs`), but reading it from a sandboxed app needs privileges we don't want.
-final class RecentLog: @unchecked Sendable {
-    private let lock = NSLock()
-    private var buffer: [String] = []
-    private let capacity = 500
-    private let formatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-
-    func append(_ line: String) {
-        lock.lock(); defer { lock.unlock() }
-        buffer.append("\(formatter.string(from: Date())) \(line)")
-        if buffer.count > capacity { buffer.removeFirst(buffer.count - capacity) }
-    }
-
-    func lines() -> [String] {
-        lock.lock(); defer { lock.unlock() }
-        return buffer
     }
 }

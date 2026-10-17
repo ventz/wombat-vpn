@@ -10,27 +10,13 @@ trap 'echo "publish-site: line $LINENO failed (exit $?): $BASH_COMMAND" >&2' ERR
 
 readonly BUCKET="${WOMBAT_BUCKET:-wombat-mac-wireguard-autoupdate}"
 readonly SITE_HOST="${WOMBAT_FEED_HOST:-https://wombat.vpetkov.net}"
-readonly WRANGLER_VERSION="${WOMBAT_WRANGLER_VERSION:-4.133.0}"
 readonly CF_ENV="${WOMBAT_CLOUDFLARE_ENV:-$HOME/.config/cloudflare/.env}"
 
 cd "$(dirname "$0")/.."
 [[ -f "$CF_ENV" ]] || { echo "publish-site: $CF_ENV not found" >&2; exit 1; }
 
-# Pinned, npm install scripts off: this runs on the machine holding the signing keys.
-wrangler() {
-    (
-        set -a
-        # shellcheck disable=SC1090
-        source "$CF_ENV"
-        set +a
-        # Only what wrangler needs reaches it, not the rest of the .env (R2 keys and the like;
-        # audit S2-L6).
-        env -i HOME="$HOME" PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
-            CLOUDFLARE_API_TOKEN="$CLOUDFLARE_ADMIN_TOKEN" ${CLOUDFLARE_ACCOUNT_ID:+CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID"} \
-            CI=1 WRANGLER_SEND_METRICS=false npm_config_ignore_scripts=true \
-            npx --yes "wrangler@$WRANGLER_VERSION" "$@"
-    )
-}
+# shellcheck source=scripts/lib-wrangler.sh
+source scripts/lib-wrangler.sh  # the working directory is the repo root here
 
 put() { # put <key> <file> <content-type> <cache-control>; content types without charset (wrangler hangs)
     wrangler r2 object put "$BUCKET/$1" --file "$2" --content-type "$3" --cache-control "$4" --remote >/dev/null

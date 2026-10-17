@@ -95,6 +95,7 @@ struct MenuBarContent: View {
     @EnvironmentObject private var store: TunnelStore
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
+    @ObservedObject private var signIn = SignInCoordinator.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -110,6 +111,13 @@ struct MenuBarContent: View {
             }
             Divider()
             VStack(alignment: .leading, spacing: 0) {
+                // A sign-in waiting in the main window must be reachable from here (A6-M2).
+                if signIn.activeTunnelID != nil {
+                    MenuButton(title: "Show Sign-In…", shortcut: "") {
+                        openWindow(id: "main")
+                        signIn.showPanel()
+                    }
+                }
                 MenuButton(title: "Open Wombat", shortcut: "O") {
                     openWindow(id: "main")
                     NSApp.activate()
@@ -158,13 +166,18 @@ private struct MenuTunnelRow: View {
 
     private var spokenDetail: String {
         guard tunnel.status == .connected, let stats = tunnel.stats else { return tunnel.statusText }
+        if let oc = stats.openConnect {
+            return "Connected, received \(Format.bytes(stats.rxBytes)), sent \(Format.bytes(stats.txBytes)), over \(oc.transport ?? "TLS")"
+        }
         return "Connected, received \(Format.bytes(stats.rxBytes)), sent \(Format.bytes(stats.txBytes)), last handshake \(Format.handshakeAge(stats.latestHandshake))"
     }
 
     private var detail: String {
         guard tunnel.status == .connected else { return tunnel.statusText }
         guard let stats = tunnel.stats else { return "Connected" }
-        return "↓ \(Format.bytes(stats.rxBytes))  ↑ \(Format.bytes(stats.txBytes))  · \(Format.handshakeAge(stats.latestHandshake))"
+        // AnyConnect has no handshakes: the transport instead (Q5-M5).
+        let tail = stats.openConnect.map { $0.transport ?? "TLS" } ?? Format.handshakeAge(stats.latestHandshake)
+        return "↓ \(Format.bytes(stats.rxBytes))  ↑ \(Format.bytes(stats.txBytes))  · \(tail)"
     }
 }
 
@@ -180,9 +193,11 @@ private struct MenuButton: View {
             HStack {
                 Text(title)
                 Spacer()
-                Text("⌘\(shortcut)")
-                    .foregroundStyle(hovering ? Color(nsColor: .alternateSelectedControlTextColor).opacity(0.8) : .secondary)
-                    .accessibilityHidden(true)  // the shortcut is announced from keyboardShortcut
+                if !shortcut.isEmpty {
+                    Text("⌘\(shortcut)")
+                        .foregroundStyle(hovering ? Color(nsColor: .alternateSelectedControlTextColor).opacity(0.8) : .secondary)
+                        .accessibilityHidden(true)  // the shortcut is announced from keyboardShortcut
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
@@ -194,6 +209,7 @@ private struct MenuButton: View {
         .buttonStyle(.plain)
         .padding(.horizontal, 5)
         .onHover { hovering = $0 }
-        .keyboardShortcut(KeyEquivalent(Character(shortcut.lowercased())), modifiers: .command)
+        // Character("") would trap: an item without a shortcut gets none.
+        .keyboardShortcut(shortcut.isEmpty ? nil : KeyboardShortcut(KeyEquivalent(Character(shortcut.lowercased())), modifiers: .command))
     }
 }

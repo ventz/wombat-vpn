@@ -33,7 +33,7 @@ struct ImportSheet: View {
             }
             Divider()
             HStack {
-                Text("Keys are stored in your login keychain. Scripts in the files (PostUp etc.) are never run.")
+                Text("Keys are stored in your login keychain. Scripts in the files (PostUp, host scans) are never run.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -50,7 +50,7 @@ struct ImportSheet: View {
     }
 
     private var importable: [ImportCandidate] {
-        model.pendingImport.filter { $0.include && $0.readError == nil && $0.parse.configuration != nil }
+        model.pendingImport.filter { $0.include && $0.readError == nil && $0.isValid }
     }
 
     private func runImport() async {
@@ -87,7 +87,7 @@ private struct CandidateRow: View {
             HStack {
                 Toggle("", isOn: $candidate.include)
                     .labelsHidden()
-                    .disabled(config == nil)
+                    .disabled(!candidate.isValid)
                     .accessibilityLabel("Import \(candidate.name)")
                 TextField("Name", text: $candidate.name)
                     .accessibilityLabel("Tunnel name for \(candidate.source)")
@@ -97,6 +97,23 @@ private struct CandidateRow: View {
             }
             if let error = candidate.readError {
                 ErrorLabel(error)
+            } else if let profileResult = candidate.profile {
+                if let profile = profileResult.profile {
+                    Group {
+                        Text("Cisco AnyConnect VPN: \(profile.server.absoluteString)")
+                        if let group = profile.group { Text("Group: \(group)") }
+                        if let user = profile.username { Text("Username: \(user)") }
+                        if profile.clientCertificate != nil {
+                            Text("Client certificate: \(candidate.certificateName ?? "not in your keychain") (sent to this gateway)")
+                        }
+                        if profile.serverCertificate != nil { Text("Server certificate: pinned") }
+                    }
+                    .font(.callout.monospaced())
+                    .foregroundStyle(.secondary)
+                    SuccessLabel("Valid profile. You sign in each time you connect.")
+                } else {
+                    ProfileDiagnostics(result: profileResult)
+                }
             } else if let config {
                 Group {
                     if config.isAmnezia { Text("Protocol: AmneziaWG (needs an AmneziaWG server)") }
@@ -172,4 +189,26 @@ struct NewTunnelSheet: View {
 
 extension String {
     func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self }
+}
+
+/// Errors in an AnyConnect profile, by line.
+struct ProfileDiagnostics: View {
+    let result: OpenConnectFile.ParseResult
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if result.diagnostics.isEmpty { SuccessLabel("Valid profile") }
+            ForEach(Array(result.diagnostics.prefix(30).enumerated()), id: \.offset) { _, d in
+                Label {
+                    Text((d.line.map { "Line \($0): " } ?? "") + d.message)
+                } icon: {
+                    Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+                }
+                .accessibilityLabel("Error: " + (d.line.map { "line \($0), " } ?? "") + d.message)
+            }
+        }
+        .font(.callout)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
 }

@@ -19,15 +19,15 @@ wombat: control Wombat tunnels from the terminal
 
 Tunnels (talk to the app; it starts in the background if needed):
   wombat status [name] [--json]        Show tunnels and their state (alias: list, ls)
-  wombat up <name>                     Connect (alias: connect)
+  wombat up <name>                     Connect (alias: connect); AnyConnect VPNs sign in in the app
   wombat down [name]                   Disconnect one tunnel, or all (alias: disconnect)
   wombat toggle <name>                 Connect or disconnect
   wombat show [name] [--json]          Live peers, handshakes and transfer, like `wg show`
-  wombat import <file|-> [--name N]    Add a tunnel (asks for approval in the app)
+  wombat import <file|-> [--name N]    Add a tunnel (.conf) or AnyConnect VPN (.anyconnect); approve in the app
   wombat export <name> [--with-keys]   Print the config; keys need Touch ID or your password
   wombat rename <name> <new-name>
   wombat delete <name>                 Asks for approval in the app
-  wombat ondemand <name> on|off [--no-wifi] [--no-ethernet]
+  wombat ondemand <name> on|off [--no-wifi|--wifi] [--no-ethernet|--ethernet]
   wombat ondemand <name> trust|untrust <wifi-name>
   wombat killswitch <name> on|off [--allow-lan]
   wombat log <name>                    Recent log lines from the running tunnel
@@ -39,7 +39,7 @@ Diagnostics:
   wombat doctor                        Check the install, extension, app and socket
 
 Offline tools (no app needed):
-  wombat check <file>... [--strict] [--json]   Lint wg-quick and AmneziaWG files; exit 1 on errors
+  wombat check <file>... [--strict] [--json]   Lint wg-quick, AmneziaWG and .anyconnect files; exit 1 on errors
   wombat genkey | wombat pubkey | wombat genpsk Key tools, compatible with `wg`
   wombat completion zsh|bash                   Shell completion script
   wombat install-skill [--dir DIR]             Teach coding agents (Claude Code) to use wombat
@@ -225,8 +225,11 @@ func printTunnels(_ tunnels: [Control.TunnelSummary]) {
         var line = "\(statusMark(t.status)) \(bold(safe(t.name).padding(toLength: width, withPad: " ", startingAt: 0)))  \(t.status)"
         if let since = t.connectedSince { line += dim("  since \(since.formatted(date: .omitted, time: .shortened))") }
         if t.onDemand { line += dim("  on-demand") }
+        // Switched on, but another VPN configuration is the enabled one (review SEC-7).
+        else if t.onDemandRules?.enabled == true { line += dim("  on-demand (paused: another VPN took over)") }
         if t.protection?.killSwitch == true { line += dim("  kill-switch") }
         if t.protocol == "amneziawg" { line += dim("  amneziawg") }
+        if t.protocol == "anyconnect" { line += dim("  anyconnect") }
         if let e = t.endpoint { line += dim("  \(e)") }
         print(line)
     }
@@ -239,7 +242,12 @@ func cmdStatus(_ args: Args) throws {
 
 func cmdUpDown(_ args: Args, up: Bool) throws {
     let name = up ? try requireName(args) : args.positional.first
-    let r = try call(Control.Request(up ? .up : .down, name: name))
+    // An AnyConnect VPN signs in first (the window opens in Wombat), which can take a while.
+    if up, let t = try? Client.send(Control.Request(.status, name: name), timeout: 5).tunnels?.first, t.protocol == "anyconnect",
+       !["connected", "connecting"].contains(t.status) {
+        printErr("Sign in to \(safe(t.endpoint ?? "the gateway")) in Wombat…")
+    }
+    let r = try call(Control.Request(up ? .up : .down, name: name), timeout: up ? 330 : 135)
     if args.json { printJSON(r.tunnels ?? []) } else { printTunnels(r.tunnels ?? []) }
 }
 
@@ -264,6 +272,15 @@ func cmdShow(_ args: Args) throws {
         if args.json { all[name] = stats; continue }
         print("\(paint("tunnel", "32;1")): \(bold(safe(name)))")
         if amnezia.contains(name) { print("  \(bold("protocol")): amneziawg") }
+        if let oc = stats.openConnect {
+            print("  \(bold("protocol")): anyconnect (openconnect)")
+            if let g = oc.gateway { print("  \(bold("gateway")): \(safe(g))") }
+            for a in [oc.ipv4, oc.ipv6].compactMap({ $0 }) { print("  \(bold("address")): \(a)") }
+            print("  \(bold("routes")): \(oc.fullTunnel ? "all traffic" : oc.routes.joined(separator: ", "))")
+            if !oc.dnsServers.isEmpty { print("  \(bold("dns")): \(oc.dnsServers.joined(separator: ", "))") }
+            print("  \(bold("transport")): \(oc.transport ?? "TLS")\(oc.cipher.map { " (\(safe($0)))" } ?? "")")
+            print("  \(bold("transfer")): \(Format.bytes(oc.rxBytes)) received, \(Format.bytes(oc.txBytes)) sent")
+        }
         if let port = stats.listenPort { print("  \(bold("listening port")): \(port)") }
         for p in stats.peers {
             print("")
@@ -281,6 +298,14 @@ func cmdShow(_ args: Args) throws {
 
 /// Reads at most maxBytes + 1, whatever the file claims its size is (it can grow between a
 /// size check and the read), and only from regular files or stdin (audit WOM-11).
+/// A command-line path as it may be printed: control and invisible format characters (escape
+/// sequences, bidi overrides) are replaced, as for tunnel names (review SEC-11).
+func shown(_ path: String) -> String {
+    String(String.UnicodeScalarView(path.unicodeScalars.map {
+        $0.properties.generalCategory == .control || $0.properties.generalCategory == .format ? "?" : $0
+    }))
+}
+
 func readInput(_ path: String) throws -> String {
     let limit = WgQuick.maxBytes
     let handle: FileHandle
@@ -289,9 +314,9 @@ func readInput(_ path: String) throws -> String {
     } else {
         let expanded = (path as NSString).expandingTildeInPath
         var info = stat()
-        guard stat(expanded, &info) == 0 else { throw Usage(message: "\(path): no such file") }
-        guard (info.st_mode & S_IFMT) == S_IFREG else { throw Usage(message: "\(path) is not a regular file") }
-        guard let h = FileHandle(forReadingAtPath: expanded) else { throw Usage(message: "\(path): cannot open") }
+        guard stat(expanded, &info) == 0 else { throw Usage(message: "\(shown(path)): no such file") }
+        guard (info.st_mode & S_IFMT) == S_IFREG else { throw Usage(message: "\(shown(path)) is not a regular file") }
+        guard let h = FileHandle(forReadingAtPath: expanded) else { throw Usage(message: "\(shown(path)): cannot open") }
         handle = h
     }
     defer { if path != "-" { try? handle.close() } }
@@ -300,7 +325,7 @@ func readInput(_ path: String) throws -> String {
         data.append(chunk)
     }
     guard data.count <= limit, let text = String(data: data, encoding: .utf8) else {
-        throw Usage(message: "\(path) is not a UTF-8 text file under \(limit / 1024) KB")
+        throw Usage(message: "\(shown(path)) is not a UTF-8 text file under \(limit / 1024) KB")
     }
     return text
 }
@@ -308,10 +333,18 @@ func readInput(_ path: String) throws -> String {
 func cmdImport(_ args: Args) throws {
     let path = try requireName(args, 0, "file (or - for stdin)")
     let text = try readInput(path)
-    let parsed = WgQuick.parse(text)
-    guard parsed.configuration != nil else {
-        for d in parsed.diagnostics { printErr("\(path): \(d)") }
-        exit(Exit.failure.rawValue)
+    if OpenConnectFile.looksLikeProfile(text) {
+        let parsed = OpenConnectFile.parse(text)
+        guard parsed.profile != nil else {
+            for d in parsed.diagnostics { printErr("\(shown(path)): \(d)") }
+            exit(Exit.failure.rawValue)
+        }
+    } else {
+        let parsed = WgQuick.parse(text)
+        guard parsed.configuration != nil else {
+            for d in parsed.diagnostics { printErr("\(shown(path)): \(d)") }
+            exit(Exit.failure.rawValue)
+        }
     }
     let name = args.options["--name"] ?? (path == "-" ? "Tunnel" : TunnelName.from(fileName: (path as NSString).lastPathComponent))
     printErr("Waiting for approval in Wombat…")
@@ -334,6 +367,7 @@ func cmdExport(_ args: Args) throws {
 func cmdRename(_ args: Args) throws {
     var request = Control.Request(.rename, name: try requireName(args))
     request.newName = try requireName(args, 1, "new name")
+    printErr("Waiting for approval in Wombat…")
     printTunnels(try call(request).tunnels ?? [])
 }
 
@@ -369,6 +403,8 @@ func cmdOnDemand(_ args: Args) throws {
     }
     var request = Control.Request(.onDemand, name: name)
     request.onDemand = rules
+    // Changes that lower protection, or switch off another tunnel, ask in the app (quality-6 L6).
+    if action != "untrust" { printErr("Waiting for Wombat (approve there if it asks)…") }
     let r = try call(request)
     if args.json { printJSON(r.tunnels ?? []); return }
     let t = r.tunnels?.first?.onDemandRules ?? rules
@@ -384,6 +420,8 @@ func cmdKillSwitch(_ args: Args) throws {
     // Same default as the app for full tunnels: the local network stays blocked unless asked
     // for (TunnelVision / LocalNet; audit Q2-M3). --block-lan is still accepted.
     request.protection = Control.Protection(killSwitch: state == "on", allowLAN: state == "on" && args.has("--allow-lan"))
+    if state == "off" { printErr("Confirm with Touch ID or your password in Wombat…") }
+    else if args.has("--allow-lan") { printErr("Waiting for Wombat (approve there if it asks)…") }
     let r = try call(request)
     let p = r.tunnels?.first?.protection
     print("kill switch: \(p?.killSwitch == true ? "on" : "off")  local network: \(p?.allowLAN == false ? "blocked" : "allowed")")
@@ -401,7 +439,7 @@ func cmdCheck(_ args: Args) throws {
     struct FileReport: Encodable {
         let file: String
         let valid: Bool
-        /// "wireguard" or "amneziawg"; nil when the file doesn't parse.
+        /// "wireguard", "amneziawg" or "anyconnect"; nil when the file doesn't parse.
         var `protocol`: String?
         let diagnostics: [String]
         let findings: [Finding]
@@ -415,6 +453,13 @@ func cmdCheck(_ args: Args) throws {
             failed = true
             continue
         }
+        if OpenConnectFile.looksLikeProfile(text) {
+            let profile = OpenConnectFile.parse(text)
+            if profile.profile == nil { failed = true }
+            reports.append(FileReport(file: path, valid: profile.profile != nil, protocol: profile.profile == nil ? nil : "anyconnect",
+                                      diagnostics: profile.diagnostics.map(\.description), findings: []))
+            continue
+        }
         let result = WgQuick.parse(text)
         let findings = result.configuration.map(ConfigReview.review) ?? []
         let valid = result.configuration != nil
@@ -426,7 +471,7 @@ func cmdCheck(_ args: Args) throws {
         printJSON(reports)
     } else {
         for r in reports {
-            print("\(r.valid ? paint("✓", "32") : paint("✕", "31")) \(bold(r.file))\(r.protocol == "amneziawg" ? dim("  amneziawg") : "")")
+            print("\(r.valid ? paint("✓", "32") : paint("✕", "31")) \(bold(shown(r.file)))\(r.protocol.map { $0 == "wireguard" ? "" : dim("  \($0)") } ?? "")")
             for d in r.diagnostics { print("  \(d.hasPrefix("error") ? paint(d, "31") : paint(d, "33"))") }
             for f in r.findings {
                 let label = f.level == .risk ? paint("risk", "31") : f.level == .warning ? paint("warning", "33") : dim("info")
@@ -539,6 +584,11 @@ func cmdDoctor() {
     let extLines = ext.split(separator: "\n").filter { $0.contains(AppIdentity.extensionBundleID) }
     let extLine = (extLines.first { $0.contains("activated enabled") } ?? extLines.first).map(String.init)
     line(extLine?.contains("activated enabled"), "Network extension", extLine?.trimmingCharacters(in: .whitespaces) ?? "not installed; open the app")
+    // The OpenConnect extension is installed only once there is an AnyConnect VPN.
+    let ocLines = ext.split(separator: "\n").filter { $0.contains(AppIdentity.openConnectExtensionBundleID) }
+    let ocLine = (ocLines.first { $0.contains("activated enabled") } ?? ocLines.first).map(String.init)
+    line(ocLine == nil ? nil : ocLine!.contains("activated enabled"), "OpenConnect extension (AnyConnect)",
+         ocLine?.trimmingCharacters(in: .whitespaces) ?? "not installed (only needed for AnyConnect VPNs)")
     line(FileManager.default.fileExists(atPath: Client.socketPath), "Control socket", Client.socketPath)
     // macOS's VPN daemon can run out of file descriptors after weeks of uptime; it then fails
     // extension validation with a misleading "NetworkExtension key must be a non-empty
@@ -557,7 +607,7 @@ func cmdDoctor() {
 }
 
 func cmdCompletion(_ args: Args) throws {
-    let commands = "status list up down toggle show import export rename delete ondemand killswitch log logs routes dns doctor check genkey pubkey genpsk completion install-skill start stop version help"
+    let commands = "status list ls up connect down disconnect toggle show import export rename delete rm ondemand killswitch log logs routes dns dnsleak doctor check lint genkey pubkey genpsk completion install-skill start stop quit version help"
     switch args.positional.first {
     case "zsh":
         print("""
@@ -566,10 +616,14 @@ func cmdCompletion(_ args: Args) throws {
           local -a cmds; cmds=(\(commands))
           if (( CURRENT == 2 )); then _describe 'command' cmds; return; fi
           case $words[2] in
-            up|down|toggle|show|export|rename|delete|ondemand|killswitch|log|status)
+            up|connect|down|disconnect|toggle|show|export|rename|delete|rm|ondemand|killswitch|log|status)
               local -a names; names=(${(f)"$(wombat _names 2>/dev/null)"}); names=(${names//:/\\:})
-              (( CURRENT == 3 )) && _describe 'tunnel' names ;;
-            check|import) _files ;;
+              if (( CURRENT == 3 )); then _describe 'tunnel' names
+              elif (( CURRENT == 4 )) && [[ $words[2] == ondemand ]]; then compadd on off trust untrust
+              elif (( CURRENT == 4 )) && [[ $words[2] == killswitch ]]; then compadd on off
+              fi ;;
+            check|lint|import) _files ;;
+            completion) (( CURRENT == 3 )) && compadd zsh bash ;;
           esac
         }
         compdef _wombat wombat
@@ -579,8 +633,16 @@ func cmdCompletion(_ args: Args) throws {
         _wombat() {
           local cur=${COMP_WORDS[COMP_CWORD]}
           if [ $COMP_CWORD -eq 1 ]; then COMPREPLY=($(compgen -W "\(commands)" -- "$cur")); return; fi
+          # macOS ships bash 3.2: no ;;& in case.
+          if [ $COMP_CWORD -eq 3 ]; then
+            case ${COMP_WORDS[1]} in
+              ondemand) COMPREPLY=($(compgen -W "on off trust untrust" -- "$cur")); return ;;
+              killswitch) COMPREPLY=($(compgen -W "on off" -- "$cur")); return ;;
+            esac
+          fi
           case ${COMP_WORDS[1]} in
-            check|import) COMPREPLY=($(compgen -f -- "$cur")) ;;
+            check|lint|import) COMPREPLY=($(compgen -f -- "$cur")) ;;
+            completion) COMPREPLY=($(compgen -W "zsh bash" -- "$cur")) ;;
             *) COMPREPLY=()
                # Names are compared and quoted, never passed to compgen -W, which would expand
                # $(...) inside a name taken from a downloaded file (audits S2-M2, F-2).
@@ -602,16 +664,16 @@ func cmdInstallSkill(_ args: Args) throws {
     let skill = """
     ---
     name: wombat
-    description: Control WireGuard and AmneziaWG tunnels on this Mac with the `wombat` CLI (Wombat app). Use when asked to connect/disconnect a VPN or WireGuard tunnel, check VPN status, inspect handshakes/transfer, lint a wg-quick .conf, generate WireGuard keys, or debug routing/DNS through a tunnel.
+    description: Control WireGuard, AmneziaWG and Cisco AnyConnect VPNs on this Mac with the `wombat` CLI (Wombat app). Use when asked to connect/disconnect a VPN or WireGuard tunnel, check VPN status, inspect handshakes/transfer, lint a wg-quick .conf or .anyconnect profile, generate WireGuard keys, or debug routing/DNS through a tunnel.
     ---
 
     # wombat CLI
 
-    - `wombat status --json`: tunnels with status (connected, disconnected, …), on-demand, kill switch, protocol (wireguard or amneziawg).
-    - `wombat up <name>` / `wombat down [name]`: connect / disconnect (no name = all). Exit 0 on success.
+    - `wombat status --json`: tunnels with status (connected, disconnected, …), on-demand, kill switch, protocol (wireguard, amneziawg or anyconnect).
+    - `wombat up <name>` / `wombat down [name]`: connect / disconnect (no name = all). Exit 0 on success. An AnyConnect VPN (protocol anyconnect) first opens a sign-in window in the Wombat app (password, Duo, single sign-on): tell the user to sign in there; the command waits up to about 5 minutes.
     - `wombat show <name> --json`: peers, endpoints, latest handshake, rx/tx bytes.
-    - `wombat check <file> [--strict] [--json]`: lint wg-quick files offline (AmneziaWG 1.0-2.0 keys included); exit 1 on errors (and on risks with --strict).
-    - `wombat genkey | tee priv | wombat pubkey`: key pair; `wombat genpsk` for a preshared key.
+    - `wombat check <file> [--strict] [--json]`: lint wg-quick files and .anyconnect profiles offline (AmneziaWG 1.0-2.0 keys included); exit 1 on errors (and on risks with --strict).
+    - `(umask 077; wombat genkey > priv) && wombat pubkey < priv`: key pair (the private key file is readable only by you; keep it out of git); `wombat genpsk` for a preshared key.
     - `wombat logs --last 10m` (or `-f`): app and tunnel logs. `wombat routes`, `wombat dns`, `wombat doctor` for debugging.
 
     Rules:

@@ -34,6 +34,10 @@ struct TunnelDetailView: View {
 struct DetailHeader: View {
     @ObservedObject var tunnel: Tunnel
     @EnvironmentObject private var store: TunnelStore
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject private var signIn = SignInCoordinator.shared
+    /// The status stays "Disconnected" until the sign-in ends: show that it is under way (A5-M2).
+    private var signingIn: Bool { signIn.activeTunnelID == tunnel.id }
 
     var body: some View {
         HStack(spacing: 14) {
@@ -47,7 +51,7 @@ struct DetailHeader: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(tunnel.name).font(.title2.weight(.semibold))
                 HStack(spacing: 6) {
-                    Text(tunnel.statusText)
+                    Text(signingIn ? "Signing in…" : tunnel.statusText)
                     if let since = tunnel.connectedSince {
                         Text("·")
                         Text(since, style: .timer).monospacedDigit()
@@ -55,6 +59,24 @@ struct DetailHeader: View {
                     if tunnel.isOnDemand {
                         Text("·")
                         Label("On demand", systemImage: "bolt.horizontal.circle").labelStyle(.titleAndIcon)
+                    }
+                    if tunnel.isOnDemandPaused {
+                        Text("·")
+                        // Orange icon only: orange text is below 4.5:1 in light mode.
+                        Label {
+                            Text("On demand paused").foregroundStyle(.primary)  // not the row's gray (A6-L6)
+                        } icon: {
+                            Image(systemName: "bolt.horizontal.circle.fill").foregroundStyle(.orange)
+                        }
+                            .labelStyle(.titleAndIcon)
+                            .accessibilityHint("Another VPN configuration on this Mac is the enabled one. Connect this tunnel to take its on-demand rules back.")
+                            .help("Another VPN configuration on this Mac is now the enabled one, so macOS isn't running this tunnel's on-demand rules. Connect this tunnel to take them back.")
+                    }
+                    if tunnel.isOpenConnect {
+                        Text("·")
+                        Label("AnyConnect", systemImage: "building.columns")
+                            .labelStyle(.titleAndIcon)
+                            .help("A Cisco AnyConnect VPN, run by OpenConnect in its own system extension.")
                     }
                     if tunnel.configuration?.isAmnezia == true {
                         Text("·")
@@ -82,6 +104,10 @@ struct DetailHeader: View {
                         .accessibilityInputLabels(["Fix It", "Turn On Extension"])
                     }
                 }
+                if signingIn && model.detailTab != .overview {
+                    Button("Show Sign-In") { signIn.showPanel() }
+                        .help("The sign-in is on the Overview tab")
+                }
                 if store.pendingHandOff.contains(tunnel.id) {
                     // An edit the extension hasn't received: it refuses to start the old copy (S3-M2).
                     Label("Changes reach the network extension the next time it runs. Connect from Wombat to apply them.", systemImage: "clock.arrow.circlepath")
@@ -96,6 +122,7 @@ struct DetailHeader: View {
                 .labelsHidden()
                 // Not "Connection": that is a tab name now, and Voice Control needs unique names.
                 .accessibilityLabel("Tunnel switch")  // stable label; the switch speaks on/off
+                .accessibilityValue(signingIn ? "Signing in" : (tunnel.isActive ? "On" : "Off"))
                 .help(tunnel.isActive ? "Disconnect (⌘↩)" : "Connect (⌘↩)")
         }
         .padding(.horizontal, 20)
@@ -128,7 +155,7 @@ struct TunnelActionsMenu: View {
         .menuStyle(.button)
         .buttonStyle(.bordered)
         .fixedSize()
-        .help("Rename, duplicate, export or delete this tunnel")
+        .help(tunnel.isOpenConnect ? "Edit, rename, duplicate, export, forget sign-in data or delete this VPN" : "Rename, duplicate, export or delete this tunnel")
         .accessibilityLabel("Tunnel actions")
         .accessibilityInputLabels(["Actions", "Tunnel Actions"])
     }
@@ -142,11 +169,29 @@ struct TunnelActionItems: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
+        if tunnel.isOpenConnect {
+            Button("Edit VPN…") { select(); model.anyConnectEditor = AnyConnectEditorTarget(tunnelID: tunnel.id) }
+        }
         Button("Rename…") { select(); model.renameSelected() }
         Button("Duplicate") { select(); model.run { model.selection = try await store.duplicate($0).id } }
         Divider()
-        Button("Export .conf File…") { select(); model.run { try await Exporter.exportOne($0) } }
-        Button("Show QR Code…") { select(); model.showingQR = true }
+        if tunnel.isOpenConnect {
+            Button("Export Profile…") { select(); model.run { try await Exporter.exportOne($0) } }
+            // The identity provider's "remember me" cookies for this VPN's single sign-on.
+            Button("Forget Sign-In Data") {
+                select()
+                Task {
+                    await SSODataStore.remove(tunnel.id)
+                    NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested, userInfo: [
+                        .announcement: "Sign-in data for \(tunnel.name) removed. Your identity provider will ask you to sign in again.",
+                        .priority: NSAccessibilityPriorityLevel.medium.rawValue,
+                    ])
+                }
+            }
+        } else {
+            Button("Export .conf File…") { select(); model.run { try await Exporter.exportOne($0) } }
+            Button("Show QR Code…") { select(); model.showingQR = true }
+        }
         Divider()
         Button("Delete Tunnel…", role: .destructive) { select(); model.deleteSelected() }
     }
@@ -159,11 +204,37 @@ struct TunnelActionItems: View {
 struct OverviewTab: View {
     @ObservedObject var tunnel: Tunnel
     @EnvironmentObject private var store: TunnelStore
+    @ObservedObject private var signIn = SignInCoordinator.shared
 
     var body: some View {
+        if signIn.activeTunnelID == tunnel.id && signIn.showsPage {
+            // The identity provider's page gets the whole column, outside the scroll view, so
+            // tabbing through it keeps the focused field on screen (accessibility-6 H1).
+            SignInView().environmentObject(signIn).padding(20)
+        } else {
+            overview
+        }
+    }
+
+    private var overview: some View {
+        ScrollViewReader { scroller in
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if let config = tunnel.configuration {
+                if tunnel.isOpenConnect {
+                    if let profile = tunnel.profile {
+                        if tunnel.status == .connected { TrafficCard(stats: tunnel.stats) }
+                        AnyConnectCards(profile: profile, certificateName: tunnel.clientCertificateName,
+                                        status: tunnel.status == .connected ? tunnel.stats?.openConnect : nil)
+                        // The sign-in, under the gateway it signs in to (user, 2026-10-16: not a
+                        // pop-up window, on the main screen).
+                        if signIn.activeTunnelID == tunnel.id {
+                            SignInView().environmentObject(signIn).id("signin")
+                        }
+                    } else {
+                        ContentUnavailableView("Profile unavailable", systemImage: "key.slash",
+                                               description: Text("The keychain item for this VPN is missing. Delete it and add it again."))
+                    }
+                } else if let config = tunnel.configuration {
                     if tunnel.status == .connected { TrafficCard(stats: tunnel.stats) }
                     InterfaceCard(config: config, stats: tunnel.stats)
                     ForEach(Array(config.peers.prefix(50).enumerated()), id: \.offset) { _, peer in
@@ -179,6 +250,11 @@ struct OverviewTab: View {
                 }
             }
             .padding(20)
+        }
+        // Every step, not only the start, so a new prompt is never below the fold (A6-H1).
+        .onChange(of: signIn.activeTunnelID == tunnel.id ? signIn.stepKey : "", initial: true) { _, key in
+            if !key.isEmpty { withAnimation { scroller.scrollTo("signin", anchor: .top) } }
+        }
         }
         .onAppear { store.watchStats(true) }
         .onDisappear { store.watchStats(false) }
@@ -243,10 +319,14 @@ struct TrafficCard: View {
         HStack(spacing: 12) {
             metric("Received", Format.bytes(stats?.rxBytes ?? 0), "arrow.down.circle.fill", .blue)
             metric("Sent", Format.bytes(stats?.txBytes ?? 0), "arrow.up.circle.fill", .purple)
+            if let oc = stats?.openConnect {
+                metric("Transport", oc.transport ?? "TLS", oc.transport == "DTLS" ? "bolt.horizontal.circle.fill" : "lock.circle.fill", .green)
+            } else {
             metric("Latest handshake",
                    Format.handshakeAge(stats?.latestHandshake) + (Format.isHandshakeStale(stats?.latestHandshake) ? " (no current session)" : ""),
                    Format.isHandshakeStale(stats?.latestHandshake) ? "exclamationmark.triangle.fill" : "hand.wave.fill",
                    Format.isHandshakeStale(stats?.latestHandshake) ? .orange : .green)
+            }
         }
     }
 
@@ -345,6 +425,37 @@ struct FindingsCard: View {
         case .risk: return .red
         case .warning: return .orange
         case .info: return .secondary
+        }
+    }
+}
+
+/// An AnyConnect VPN's Overview: where it goes and how you sign in, then (while connected) what
+/// the gateway assigned.
+struct AnyConnectCards: View {
+    let profile: OpenConnectProfile
+    let certificateName: String?
+    let status: OpenConnectStatus?
+
+    var body: some View {
+        Card(title: "Gateway", systemImage: "building.columns") {
+            InfoRow(label: "Server", value: profile.server.absoluteString, monospaced: true, copyable: true)
+            if let group = profile.group { InfoRow(label: "Group", value: group) }
+            if let username = profile.username { InfoRow(label: "Username", value: username) }
+            InfoRow(label: "Sign-in", value: profile.clientCertificate == nil
+                    ? "At each connect (password, Duo or single sign-on)"
+                    : "Client certificate \(certificateName.flatMap { $0.isEmpty ? nil : $0 } ?? "(missing from the keychain)"), plus whatever the gateway asks")
+            InfoRow(label: "Server certificate", value: profile.serverCertificate.map { "Pinned, SHA-256 \($0.prefix(16))…" } ?? "Trusted by macOS")
+            InfoRow(label: "Protocol", value: "Cisco AnyConnect (OpenConnect\(profile.dtls ? ", DTLS allowed" : ", TLS only"))")
+        }
+        if let status {
+            Card(title: "Connection", systemImage: "network") {
+                if let v4 = status.ipv4 { InfoRow(label: "IPv4 address", value: v4, monospaced: true, copyable: true) }
+                if let v6 = status.ipv6 { InfoRow(label: "IPv6 address", value: v6, monospaced: true, copyable: true) }
+                InfoRow(label: "Routes", value: status.fullTunnel ? "All traffic" : status.routes.prefix(12).joined(separator: ", ") + (status.routes.count > 12 ? " (+\(status.routes.count - 12) more)" : ""), monospaced: !status.fullTunnel)
+                if !status.dnsServers.isEmpty { InfoRow(label: "DNS", value: status.dnsServers.joined(separator: ", "), monospaced: true) }
+                if let gateway = status.gateway { InfoRow(label: "Gateway address", value: gateway, monospaced: true) }
+                if let cipher = status.cipher { InfoRow(label: "Encryption", value: "\(status.transport ?? "TLS"): \(cipher)", monospaced: true) }
+            }
         }
     }
 }

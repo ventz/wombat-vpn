@@ -9,6 +9,9 @@ enum AppIdentity {
     /// Team-prefixed app group, e.g. 8J9W3ZG4ZN.net.vpetkov.wombat.
     static let appGroup: String = info("WombatAppGroup") ?? "8J9W3ZG4ZN.net.vpetkov.wombat"
     static var extensionBundleID: String { appBundleID + ".tunnel" }
+    /// The OpenConnect (Cisco AnyConnect) system extension: a separate process with its own
+    /// sandbox, so the OpenConnect C code never shares memory with WireGuard keys.
+    static var openConnectExtensionBundleID: String { appBundleID + ".openconnect" }
     /// Unified logging subsystem: `log stream --predicate 'subsystem == "net.vpetkov.wombat"'`.
     static var logSubsystem: String { appBundleID }
     /// Keychain service for tunnel configurations (one generic password per tunnel).
@@ -26,6 +29,8 @@ enum ProviderMessage: UInt8 {
     case runtimeConfiguration = 0
     /// Reply: recent log lines from the extension, newline separated.
     case recentLog = 1
+    /// OpenConnect extension only. Reply: `OpenConnectStatus` as JSON (no secrets).
+    case openConnectStatus = 2
 }
 
 /// providerConfiguration keys. Holds no secrets: /Library/Preferences/com.apple.networkextension.plist
@@ -41,6 +46,10 @@ enum ProviderConfigKey {
     /// same revision, so a tunnel edited while the extension wasn't running can't start from its
     /// old configuration (audit S3-M1/M2): it fails closed until the app hands the new one over.
     static let revision = "rev"
+    /// Mirrors the manager's on-demand switch, which the extension can't read: a start at the
+    /// login window is allowed only for an on-demand tunnel (review SEC-2, security-6 L4).
+    /// Not a secret: on-demand rules sit in the same world-readable file.
+    static let onDemand = "od"
 }
 
 /// Keys of the options dictionary passed to `startVPNTunnel(options:)`.

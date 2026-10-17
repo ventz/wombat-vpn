@@ -37,15 +37,15 @@ themselves keep running when the app quits, and the offline tools work without i
 | Command | Does |
 |---|---|
 | `wombat status [name] [--json]` | Tunnels and their state (aliases: `list`, `ls`; also the default command) |
-| `wombat up <name>` | Connect (alias `connect`); waits until connected and reports |
+| `wombat up <name>` | Connect (alias `connect`); waits until connected and reports. An AnyConnect VPN opens its sign-in window in Wombat first |
 | `wombat down [name]` | Disconnect one tunnel, or all (alias `disconnect`) |
 | `wombat toggle <name>` | Connect or disconnect |
-| `wombat show [name] [--json]` | Peers, endpoints, latest handshake, transfer, like `wg show` |
-| `wombat import <file\|-> [--name N]` | Add a tunnel; you approve it in the app |
-| `wombat export <name> [--with-keys]` | Print the config; keys need Touch ID or your password |
+| `wombat show [name] [--json]` | Peers, endpoints, latest handshake, transfer, like `wg show`; for AnyConnect the gateway, addresses, routes, DNS and transport |
+| `wombat import <file\|-> [--name N]` | Add a tunnel (`.conf`) or an AnyConnect VPN (`.anyconnect` profile); you approve it in the app |
+| `wombat export <name> [--with-keys]` | Print the config; keys need Touch ID or your password. An AnyConnect profile has no secrets |
 | `wombat rename <name> <new-name>` | Rename |
 | `wombat delete <name>` | Delete the tunnel and its keys; you approve it in the app |
-| `wombat ondemand <name> on\|off [--no-wifi] [--no-ethernet]` | Connect automatically |
+| `wombat ondemand <name> on\|off [--no-wifi\|--wifi] [--no-ethernet\|--ethernet]` | Connect automatically (WireGuard only: AnyConnect needs a sign-in each time) |
 | `wombat ondemand <name> trust\|untrust <wifi-name>` | Disconnect on (or stop trusting) a Wi-Fi network |
 | `wombat killswitch <name> on\|off [--allow-lan]` | Block traffic outside the tunnel; the local network stays blocked unless `--allow-lan` |
 | `wombat log <name>` | Recent log lines from the running tunnel |
@@ -68,7 +68,7 @@ must be a non-empty dictionary", and other VPNs lose on-demand. The fix is
 
 | Command | Does |
 |---|---|
-| `wombat check <file>... [--strict] [--json]` | Lint wg-quick files (AmneziaWG 1.0 to 2.0 settings included): errors with line numbers, warnings, security review |
+| `wombat check <file>... [--strict] [--json]` | Lint wg-quick files (AmneziaWG 1.0 to 2.0 settings included) and `.anyconnect` profiles: errors with line numbers, warnings, security review |
 | `wombat genkey` | New private key (like `wg genkey`) |
 | `wombat pubkey` | Public key for the private key on stdin (like `wg pubkey`) |
 | `wombat genpsk` | New preshared key (like `wg genpsk`) |
@@ -87,7 +87,8 @@ The CLI is signed and the app verifies it, but any program running as you can ru
 anything that adds a tunnel or weakens protection asks you in the app first:
 
 - `import`, `delete` and `rename` (a rename could disguise one tunnel as another)
-- `down` on a tunnel with on-demand (disconnecting turns on-demand off)
+- `down` on a tunnel with on-demand (disconnecting turns on-demand off) or an active kill switch
+  (traffic would then leave without the VPN)
 - `up`, or `ondemand … on`, when another tunnel has on-demand or an active kill switch (Wombat
   runs one tunnel at a time, so that tunnel is switched off)
 - turning on-demand off, connecting on fewer interfaces, trusting a Wi-Fi network (even while
@@ -96,8 +97,9 @@ anything that adds a tunnel or weakens protection asks you in the app first:
 - turning the kill switch off and `export --with-keys` (Touch ID or password)
 
 The command waits while the dialog is open (up to two minutes) and never sends a request twice.
-"Cancel" is the default button, and after you decline, new prompts are refused for 10 seconds so a
-script can't keep asking. Before sending anything, `wombat` checks that the socket belongs to the
+"Cancel" is the default button, and after you decline (or cancel Touch ID), new prompts and
+Touch ID requests are refused for 10 seconds, also across an app restart, so a script can't keep
+asking. macOS's own controls (System Settings, `scutil --nc stop`) can still stop a tunnel. Before sending anything, `wombat` checks that the socket belongs to the
 signed Wombat app, since an import carries a private key.
 
 ## JSON output
@@ -115,9 +117,22 @@ ISO 8601). For example, `wombat status --json`:
     "protection" : { "allowLAN" : true, "killSwitch" : false },
     "protocol" : "wireguard",
     "status" : "connected"
+  },
+  {
+    "addresses" : [],
+    "endpoint" : "vpn.example.edu",
+    "name" : "work",
+    "onDemand" : false,
+    "protection" : { "allowLAN" : true, "killSwitch" : false },
+    "protocol" : "anyconnect",
+    "status" : "disconnected"
   }
 ]
 ```
+
+`onDemand` is whether macOS is running the tunnel's on-demand rules; `onDemandRules.enabled` is
+the setting. They differ when another VPN configuration (another app's, or another account's)
+became the enabled one: `status` then shows "on-demand (paused)".
 
 ## Exit codes
 

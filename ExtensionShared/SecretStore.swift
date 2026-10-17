@@ -2,16 +2,34 @@ import Foundation
 import os
 import TunnelCore
 
-/// Tunnel configurations as the extension sees them: one 0600 file per tunnel in the
+/// Tunnel configurations as an extension sees them: one 0600 file per tunnel in the
 /// extension's sandbox container, which belongs to root (system extensions run as root), so no
 /// user process can read them. Each record remembers which macOS user stored it, and only that
 /// user's app may replace or remove it: VPN configurations are shared by all users of the Mac,
 /// so another account must not be able to swap in its own config under your tunnel's id.
-final class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @unchecked Sendable {
-    static let shared = SecretStore()
+///
+/// Shared by both system extensions (WireGuard and OpenConnect), each with its own container,
+/// validator and XPC interface; `main.swift` of each sets them up before the listener starts.
+class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @unchecked Sendable {
+    /// The extension's store, chosen by its main.swift.
+    nonisolated(unsafe) static var shared: SecretStore!
 
-    private let log = Logger(subsystem: AppIdentity.logSubsystem, category: "secrets")
-    private let lock = NSLock()
+    /// Checks a configuration before it is stored: nil when valid, else the reason.
+    let validate: (String) -> String?
+    let maxBytes: Int
+    /// What the XPC connection exports (a subclass may add methods).
+    let interface: NSXPCInterface
+    /// Called when a tunnel's record goes, for per-tunnel caches.
+    var onForget: (String) -> Void = { _ in }
+
+    let log = Logger(subsystem: AppIdentity.logSubsystem, category: "secrets")
+    let lock = NSLock()
+
+    init(maxBytes: Int, interface: NSXPCInterface, validate: @escaping (String) -> String?) {
+        self.maxBytes = maxBytes
+        self.interface = interface
+        self.validate = validate
+    }
 
     private struct Record: Codable {
         var ownerUID: UInt32
@@ -39,7 +57,7 @@ final class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDeleg
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
         // The listener's code-signing requirement already restricts clients to our app.
-        connection.exportedInterface = NSXPCInterface(with: TunnelSecretStoreProtocol.self)
+        connection.exportedInterface = interface
         connection.exportedObject = self
         connection.resume()
         return true
@@ -49,13 +67,10 @@ final class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDeleg
         guard let uid = callerUID() else { return reply("Unknown caller") }
         guard UUID(uuidString: id) != nil else { return reply("Invalid tunnel id") }
         guard revision.isEmpty || UUID(uuidString: revision) != nil else { return reply("Invalid revision") }
-        guard config.count <= WgQuick.maxBytes, let text = String(data: config, encoding: .utf8) else {
-            return reply("Configuration is not UTF-8 text under \(WgQuick.maxBytes / 1024) KB")
+        guard config.count <= maxBytes, let text = String(data: config, encoding: .utf8) else {
+            return reply("Configuration is not UTF-8 text under \(maxBytes / 1024) KB")
         }
-        let parsed = WgQuick.parse(text)
-        guard parsed.configuration != nil else {
-            return reply("Invalid configuration: \(parsed.errors.map(\.description).joined(separator: "; "))")
-        }
+        if let problem = validate(text) { return reply("Invalid configuration: \(problem)") }
         lock.lock(); defer { lock.unlock() }
         if let owner = ownerUID(id), owner != uid {
             log.error("Refused store for \(id, privacy: .public): owned by uid \(owner, privacy: .public), caller \(uid, privacy: .public)")
@@ -84,7 +99,7 @@ final class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDeleg
         } catch {
             return reply("Could not remove the extension's copy: \(error.localizedDescription)")
         }
-        EndpointAddresses.forget(tunnelID: id)
+        onForget(id)
         reply(nil)
     }
 
@@ -98,7 +113,7 @@ final class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDeleg
             let id = url.deletingPathExtension().lastPathComponent
             guard !keep.contains(id), UUID(uuidString: id) != nil, ownerUID(id) == uid else { continue }
             if (try? FileManager.default.removeItem(at: url)) != nil {
-                EndpointAddresses.forget(tunnelID: id)
+                onForget(id)
                 removed += 1
             }
         }
@@ -133,14 +148,14 @@ final class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDeleg
 
     // MARK: Helpers
 
-    private func file(_ id: String) -> URL { directory.appendingPathComponent(id.lowercased() + ".json") }
+    func file(_ id: String) -> URL { directory.appendingPathComponent(id.lowercased() + ".json") }
 
-    private func ownerUID(_ id: String) -> UInt32? {
+    func ownerUID(_ id: String) -> UInt32? {
         guard let data = try? Data(contentsOf: file(id)) else { return nil }
         return (try? JSONDecoder().decode(Record.self, from: data))?.ownerUID
     }
 
-    private func callerUID() -> UInt32? {
+    func callerUID() -> UInt32? {
         guard let connection = NSXPCConnection.current() else { return nil }
         return UInt32(connection.effectiveUserIdentifier)
     }

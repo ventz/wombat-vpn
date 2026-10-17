@@ -146,6 +146,7 @@ public enum TunnelName {
     public static func from(fileName: String) -> String {
         var base = fileName
         if base.lowercased().hasSuffix(".conf") { base = String(base.dropLast(5)) }
+        if base.lowercased().hasSuffix(".anyconnect") { base = String(base.dropLast(11)) }
         return sanitize(base)
     }
 

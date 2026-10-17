@@ -1,0 +1,8 @@
+{
+  "name": "wombat-release-tools",
+  "private": true,
+  "description": "wrangler for scripts/release.sh and scripts/publish-site.sh, pinned with a committed lockfile",
+  "dependencies": {
+    "wrangler": "4.133.0"
+  }
+}
