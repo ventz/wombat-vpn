@@ -1,6 +1,6 @@
 <div align="center">
 
-<p><strong>⭐ If Wombat is useful to you, please <a href="https://github.com/ventz/wombat-wireguard-mac-app">star the repo</a>.</strong> Stars help it get into the official Homebrew catalog.</p>
+<p><strong>⭐ If Wombat is useful to you, please star it: click the ☆ Star button at the top right of the <a href="https://github.com/ventz/wombat-wireguard-mac-app">GitHub repo page</a>.</strong> Stars help it get into the official Homebrew catalog.</p>
 
 <img src="docs/images/icon.png" alt="Wombat logo: a white ribbon folded into a W on a deep red rounded square" width="160">
 
