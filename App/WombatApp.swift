@@ -573,7 +573,7 @@ enum AboutPanel {
             credits.append(NSAttributedString(string: text + "\n", attributes: attributes))
         }
         add("© 2026 Ventz Petkov · MIT License")
-        add("https://github.com/ventz/wombat-wireguard-mac-app", link: "https://github.com/ventz/wombat-wireguard-mac-app")
+        add("https://github.com/ventz/wombat-vpn", link: "https://github.com/ventz/wombat-vpn")
         add("")
         for line in Credits.engines { add(line) }
         add("https://www.wireguard.com", link: "https://www.wireguard.com")

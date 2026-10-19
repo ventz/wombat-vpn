@@ -255,7 +255,7 @@ private struct CommandLineSettings: View {
 
 /// Makes it obvious that Wombat is open source: name, version, license and where the code lives.
 private struct AboutSettings: View {
-    static let repository = URL(string: "https://github.com/ventz/wombat-wireguard-mac-app")!
+    static let repository = URL(string: "https://github.com/ventz/wombat-vpn")!
     private var version: String {
         let info = Bundle.main.infoDictionary
         return "\(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))"
@@ -284,7 +284,7 @@ private struct AboutSettings: View {
                     }
                 }
                 LabeledContent("Source code") {
-                    Link("github.com/ventz/wombat-wireguard-mac-app", destination: Self.repository)
+                    Link("github.com/ventz/wombat-vpn", destination: Self.repository)
                 }
                 LabeledContent("Report a problem") {
                     Link("GitHub Issues", destination: Self.repository.appendingPathComponent("issues"))

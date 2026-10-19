@@ -353,7 +353,7 @@ run from there). On first launch, allow the extension in System Settings › Gen
 signed with a Developer ID, notarized by Apple, and updates itself.
 
 AnyConnect support links OpenConnect (LGPL-2.1) statically; how to rebuild and relink it from
-source is in [Vendor/openconnect/WOMBAT.md](https://github.com/ventz/wombat-wireguard-mac-app/blob/v$version/Vendor/openconnect/WOMBAT.md).
+source is in [Vendor/openconnect/WOMBAT.md](https://github.com/ventz/wombat-vpn/blob/v$version/Vendor/openconnect/WOMBAT.md).
 
 ## Verify
 

@@ -1,6 +1,6 @@
 <div align="center">
 
-<p><strong>⭐ If Wombat is useful to you, please star it: click the ☆ Star button at the top right of the <a href="https://github.com/ventz/wombat-wireguard-mac-app">GitHub repo page</a>.</strong> Stars help it get into the official Homebrew catalog.</p>
+<p><strong>⭐ If Wombat is useful to you, please star it: click the ☆ Star button at the top right of the <a href="https://github.com/ventz/wombat-vpn">GitHub repo page</a>.</strong> Stars help it get into the official Homebrew catalog.</p>
 
 <img src="docs/images/icon.png" alt="Wombat logo: a white ribbon folded into a W on a deep red rounded square" width="160">
 
@@ -16,7 +16,7 @@ and powerful when you need it, with a command line developers will actually use.
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 <img src="https://img.shields.io/badge/macOS-15%2B-black.svg" alt="macOS 15+">
 <img src="https://img.shields.io/badge/Swift-SwiftUI-orange.svg" alt="Swift and SwiftUI">
-<a href="https://github.com/ventz/wombat-wireguard-mac-app/stargazers"><img src="https://img.shields.io/github/stars/ventz/wombat-wireguard-mac-app?style=social" alt="GitHub stars"></a>
+<a href="https://github.com/ventz/wombat-vpn/stargazers"><img src="https://img.shields.io/github/stars/ventz/wombat-vpn?style=social" alt="GitHub stars"></a>
 
 </div>
 
@@ -70,7 +70,7 @@ app for your own WireGuard servers and your work or campus VPN, no Cisco client 
 ## Quick Install
 
 1. Download **[Wombat.dmg](https://wombat.vpetkov.net/Wombat.dmg)** (always the latest version;
-   also on [GitHub Releases](https://github.com/ventz/wombat-wireguard-mac-app/releases)).
+   also on [GitHub Releases](https://github.com/ventz/wombat-vpn/releases)).
 2. Open it and drag **Wombat** into **Applications** (network extensions only run from there).
 3. Open Wombat, then allow its network extension once: **System Settings › General › Login Items
    & Extensions** › **Extensions** › **By Category** › **ⓘ** next to **Network Extensions** ›
@@ -94,7 +94,7 @@ extensions that are Developer ID signed), see [docs/DEVELOPING.md](docs/DEVELOPI
 
 ```bash
 brew install go xcodegen
-git clone https://github.com/ventz/wombat-wireguard-mac-app && cd wombat-wireguard-mac-app
+git clone https://github.com/ventz/wombat-vpn && cd wombat-vpn
 scripts/build-signed.sh --install
 ```
 
