@@ -41,7 +41,9 @@ Diagnostics:
 Offline tools (no app needed):
   wombat check <file>... [--strict] [--json]   Lint wg-quick, AmneziaWG and .anyconnect files; exit 1 on errors
   wombat genkey | wombat pubkey | wombat genpsk Key tools, compatible with `wg`
-  wombat completion zsh|bash                   Shell completion script
+  wombat completion install [zsh|bash|fish]    Set up Tab completion for your shells (--dry-run shows what)
+  wombat completion status | uninstall         Show or remove what install set up
+  wombat completion zsh|bash|fish              Print a shell completion script
   wombat install-skill [--dir DIR]             Teach coding agents (Claude Code) to use wombat
 
 App:
@@ -624,56 +626,22 @@ func cmdDoctor() {
     }
 }
 
+/// Prints a completion script, or sets them up (CompletionSetup.swift). The scripts live in
+/// completions/ in the repository and ship in the app at Contents/Resources/completions, where
+/// the Homebrew cask and `completion install` link them from. Tunnel names come from `wombat _names`.
 func cmdCompletion(_ args: Args) throws {
-    let commands = "status list ls up connect down disconnect toggle show import export rename delete rm ondemand killswitch log logs routes dns dnsleak doctor check lint genkey pubkey genpsk completion install-skill start stop quit version help"
-    switch args.positional.first {
-    case "zsh":
-        print("""
-        #compdef wombat
-        _wombat() {
-          local -a cmds; cmds=(\(commands))
-          if (( CURRENT == 2 )); then _describe 'command' cmds; return; fi
-          case $words[2] in
-            up|connect|down|disconnect|toggle|show|export|rename|delete|rm|ondemand|killswitch|log|status)
-              local -a names; names=(${(f)"$(wombat _names 2>/dev/null)"}); names=(${names//:/\\:})
-              if (( CURRENT == 3 )); then _describe 'tunnel' names
-              elif (( CURRENT == 4 )) && [[ $words[2] == ondemand ]]; then compadd on off trust untrust
-              elif (( CURRENT == 4 )) && [[ $words[2] == killswitch ]]; then compadd on off
-              fi ;;
-            check|lint|import) _files ;;
-            completion) (( CURRENT == 3 )) && compadd zsh bash ;;
-          esac
-        }
-        compdef _wombat wombat
-        """)
-    case "bash":
-        print("""
-        _wombat() {
-          local cur=${COMP_WORDS[COMP_CWORD]}
-          if [ $COMP_CWORD -eq 1 ]; then COMPREPLY=($(compgen -W "\(commands)" -- "$cur")); return; fi
-          # macOS ships bash 3.2: no ;;& in case.
-          if [ $COMP_CWORD -eq 3 ]; then
-            case ${COMP_WORDS[1]} in
-              ondemand) COMPREPLY=($(compgen -W "on off trust untrust" -- "$cur")); return ;;
-              killswitch) COMPREPLY=($(compgen -W "on off" -- "$cur")); return ;;
-            esac
-          fi
-          case ${COMP_WORDS[1]} in
-            check|lint|import) COMPREPLY=($(compgen -f -- "$cur")) ;;
-            completion) COMPREPLY=($(compgen -W "zsh bash" -- "$cur")) ;;
-            *) COMPREPLY=()
-               # Names are compared and quoted, never passed to compgen -W, which would expand
-               # $(...) inside a name taken from a downloaded file (audits S2-M2, F-2).
-               local n; while IFS= read -r n; do
-                 [[ $n == "$cur"* ]] && COMPREPLY+=("$(printf '%q' "$n")")
-               done < <(wombat _names 2>/dev/null) ;;
-          esac
-        }
-        complete -F _wombat wombat
-        """)
-    default:
-        throw Usage(message: "completion: expected zsh or bash")
+    if let action = args.positional.first, ["install", "uninstall", "status"].contains(action) {
+        try CompletionSetup.run(action, args)
     }
+    guard let shell = args.positional.first.flatMap(CompletionShell.init(rawValue:)) else {
+        throw Usage(message: "completion: expected zsh, bash or fish (or install, uninstall, status)")
+    }
+    let url = bundledCompletionURL(shell.bundledName)
+    guard let script = try? String(contentsOf: url, encoding: .utf8) else {
+        printErr("wombat: no completion script at \(url.path); use the wombat inside Wombat.app")
+        exit(Exit.failure.rawValue)
+    }
+    print(script, terminator: "")
 }
 
 func cmdInstallSkill(_ args: Args) throws {

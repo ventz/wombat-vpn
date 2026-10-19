@@ -1,0 +1,169 @@
+#compdef wombat
+# zsh completion for wombat, the command line of Wombat (https://wombat.vpetkov.net).
+#
+# The Homebrew cask links this file into $(brew --prefix)/share/zsh/site-functions. To set it up
+# by hand, save it as _wombat in a directory on $fpath (before compinit runs):
+#   wombat completion zsh > ~/.zsh/completions/_wombat
+# or load it for the current shell only (after compinit):
+#   source <(wombat completion zsh)
+
+# Tunnel names come from `wombat _names`: from the app when it's running, else from macOS; it
+# never launches the app and prints each name sanitized. --state adds a tab and the state, shown
+# as the description. For up/connect it lists the tunnels that aren't connected, for
+# down/disconnect the connected ones (all when none match). _describe quotes the names, so a
+# name from a downloaded file is never evaluated.
+(( $+functions[_wombat_tunnels] )) ||
+_wombat_tunnels() {
+  local cmd line
+  local -a tunnels
+  [[ $words[1] == (up|connect|down|disconnect) ]] && cmd=$words[1]
+  for line in ${(f)"$(_call_program tunnels wombat _names --state $cmd 2>/dev/null)"}; do
+    if [[ $line == *$'\t'* ]]; then
+      tunnels+=("${${line%%$'\t'*}//:/\\:}:${line#*$'\t'}")
+    else
+      tunnels+=("${line//:/\\:}")  # an older wombat: names only
+    fi
+  done
+  _describe -t tunnels tunnel tunnels
+}
+
+(( $+functions[_wombat_commands] )) ||
+_wombat_commands() {
+  local -a commands
+  commands=(
+    'status:show tunnels and their state'
+    'list:show tunnels and their state'
+    'ls:show tunnels and their state'
+    'up:connect a tunnel'
+    'connect:connect a tunnel'
+    'down:disconnect one tunnel, or all'
+    'disconnect:disconnect one tunnel, or all'
+    'toggle:connect or disconnect a tunnel'
+    'show:live peers, handshakes and transfer'
+    'import:add a tunnel or AnyConnect VPN from a file'
+    'export:print a tunnel'"'"'s config'
+    'rename:rename a tunnel'
+    'delete:delete a tunnel'
+    'rm:delete a tunnel'
+    'ondemand:connect automatically, or trust a Wi-Fi network'
+    'killswitch:block traffic outside the tunnel'
+    'log:recent log lines from a running tunnel'
+    'logs:app and extension logs'
+    'routes:routes through tunnel interfaces'
+    'dns:resolvers in use, and whether they are tunneled'
+    'dnsleak:resolvers in use, and whether they are tunneled'
+    'doctor:check the install, extension, app and socket'
+    'check:lint wg-quick files and .anyconnect profiles'
+    'lint:lint wg-quick files and .anyconnect profiles'
+    'genkey:new private key'
+    'pubkey:public key for the private key on stdin'
+    'genpsk:new preshared key'
+    'completion:print a shell completion script'
+    'install-skill:teach coding agents to use wombat'
+    'start:launch the app'
+    'stop:quit the app (tunnels keep running)'
+    'quit:quit the app (tunnels keep running)'
+    'version:print the version'
+    'help:show help'
+  )
+  _describe -t commands 'wombat command' commands
+}
+
+_wombat() {
+  local curcontext=$curcontext state line ret=1
+  local -A opt_args
+  local json='--json[print JSON]'
+
+  _arguments -C \
+    '(- :)'{-h,--help}'[show help]' \
+    '(- :)'{-v,--version}'[print the version]' \
+    '1: :_wombat_commands' \
+    '*:: :->args' && ret=0
+
+  [[ $state == args ]] || return ret
+  curcontext=${curcontext%:*:*}:wombat-$words[1]:
+
+  case $words[1] in
+    status|list|ls)
+      _arguments "$json" '1::tunnel:_wombat_tunnels' && ret=0 ;;
+    up|connect|toggle)
+      _arguments "$json" ':tunnel:_wombat_tunnels' && ret=0 ;;
+    down|disconnect)
+      _arguments "$json" '1::tunnel (all when omitted):_wombat_tunnels' && ret=0 ;;
+    show)
+      _arguments "$json" '*:tunnel:_wombat_tunnels' && ret=0 ;;
+    import)
+      _arguments "$json" \
+        '--name[name for the new tunnel]:name: ' \
+        ':config file (.conf or .anyconnect, - for stdin):_files' && ret=0 ;;
+    export)
+      _arguments '--with-keys[include private keys (asks for Touch ID or your password)]' \
+        ':tunnel:_wombat_tunnels' && ret=0 ;;
+    rename)
+      _arguments ':tunnel:_wombat_tunnels' ':new name: ' && ret=0 ;;
+    delete|rm|log)
+      _arguments ':tunnel:_wombat_tunnels' && ret=0 ;;
+    ondemand)
+      _arguments "$json" \
+        '(--no-wifi)--wifi[connect on Wi-Fi]' \
+        '(--wifi)--no-wifi[do not connect on Wi-Fi]' \
+        '(--no-ethernet)--ethernet[connect on Ethernet]' \
+        '(--ethernet)--no-ethernet[do not connect on Ethernet]' \
+        ':tunnel:_wombat_tunnels' \
+        ':action:((on\:"connect automatically" off\:"stop connecting automatically" trust\:"disconnect on a Wi-Fi network" untrust\:"stop trusting a Wi-Fi network"))' \
+        '::Wi-Fi network name: ' && ret=0 ;;
+    killswitch)
+      _arguments '--allow-lan[let local network traffic through]' \
+        ':tunnel:_wombat_tunnels' \
+        ':state:((on\:"block traffic outside the tunnel" off\:"turn the kill switch off"))' && ret=0 ;;
+    logs)
+      _arguments \
+        '(-f --follow --last)'{-f,--follow}'[stream new log lines]' \
+        '(-f --follow)--last[how far back to show]:duration (like 10m, 1h, 2d): ' && ret=0 ;;
+    check|lint)
+      _arguments "$json" \
+        '--strict[also exit 1 on security risks]' \
+        '*:config file (- for stdin):_files' && ret=0 ;;
+    completion)
+      if (( CURRENT == 2 )); then
+        local -a actions
+        actions=(
+          'install:set up Tab completion for your shells'
+          'status:show what install set up'
+          'uninstall:remove what install set up'
+          'zsh:print the zsh script'
+          'bash:print the bash script'
+          'fish:print the fish script'
+        )
+        _describe -t actions 'action or shell' actions && ret=0
+      else
+        shift words; (( CURRENT-- ))
+        case $words[1] in
+          install)
+            _arguments \
+              '(-n --dry-run)'{-n,--dry-run}'[show what would change, change nothing]' \
+              '--force[replace a file that is not Wombat'"'"'s (it is kept as a backup)]' \
+              '(-y --yes)'{-y,--yes}'[change shell startup files without asking]' \
+              '--dir[put the file in this folder (one shell)]:folder:_directories' \
+              '*:shell:(zsh bash fish)' && ret=0 ;;
+          uninstall)
+            _arguments '(-n --dry-run)'{-n,--dry-run}'[show what would change, change nothing]' \
+              '*:shell:(zsh bash fish)' && ret=0 ;;
+          status)
+            _arguments '*:shell:(zsh bash fish)' && ret=0 ;;
+        esac
+      fi ;;
+    install-skill|install-skills)
+      _arguments '--dir[directory for SKILL.md]:directory:_directories' && ret=0 ;;
+    *)
+      _message 'no more arguments' ;;
+  esac
+  return ret
+}
+
+# Autoloaded from $fpath, this file is the body of _wombat; sourced, it registers itself.
+if [[ $funcstack[1] == _wombat ]]; then
+  _wombat "$@"
+else
+  compdef _wombat wombat
+fi

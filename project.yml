@@ -49,6 +49,11 @@ targets:
       - Shared
       - path: Resources
         buildPhase: resources
+      # Shell completion scripts, as a folder: Contents/Resources/completions, where the Homebrew
+      # cask links them from and `wombat completion` reads them.
+      - path: completions
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: TunnelCore
       - package: Sparkle

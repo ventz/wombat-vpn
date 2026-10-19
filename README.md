@@ -150,6 +150,20 @@ wombat logs -f                        # stream app and tunnel logs
 shell completion. The Homebrew cask installs the CLI; otherwise Wombat's Settings › Command Line
 shows the command and whether it is installed.
 
+**Tab completion** for zsh (oh-my-zsh too), bash and fish completes commands, flags, files and
+your tunnel names. One command sets it up for the shells you use, and shows any change to a
+startup file before making it:
+
+```bash
+wombat completion install --dry-run   # see what it would do
+wombat completion install             # do it
+```
+
+With oh-my-zsh it goes into `$ZSH_CUSTOM/completions`, which oh-my-zsh already reads, so
+`~/.zshrc` stays as it is. The Homebrew cask also installs completion; your shell only needs to
+read Homebrew's folders. `wombat completion status` shows what is set up and `wombat completion
+uninstall` removes it. To set it up by hand, see [docs/CLI.md](docs/CLI.md#shell-completion).
+
 Credit: the command line's scope was modeled on the `ctl` tool of
 [wireguide](https://github.com/korjwl1/wireguide) by korjwl1.
 

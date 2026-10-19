@@ -72,7 +72,9 @@ must be a non-empty dictionary", and other VPNs lose on-demand. The fix is
 | `wombat genkey` | New private key (like `wg genkey`) |
 | `wombat pubkey` | Public key for the private key on stdin (like `wg pubkey`) |
 | `wombat genpsk` | New preshared key (like `wg genpsk`) |
-| `wombat completion zsh\|bash` | Shell completion script |
+| `wombat completion install [zsh\|bash\|fish] [--dry-run] [--yes] [--force] [--dir DIR]` | Set up Tab completion for your shells (see [Shell completion](#shell-completion)) |
+| `wombat completion status` / `uninstall [--dry-run]` | Show, or remove, what `install` set up |
+| `wombat completion zsh\|bash\|fish` | Print a completion script |
 | `wombat install-skill [--dir DIR]` | Write a skill that teaches coding agents to use `wombat` |
 
 `check` in CI:
@@ -152,10 +154,116 @@ became the enabled one: `status` then shows "on-demand (paused)".
 
 ## Shell completion
 
+Completion covers commands, flags, `on`/`off` style arguments, files, and your tunnel names. The
+names come from the running app (`wombat` asks it, and never starts it just to complete a name).
+The scripts are in [`completions/`](../completions) and ship inside the app, in
+`Wombat.app/Contents/Resources/completions`.
+
+### Set it up with one command
+
 ```bash
-wombat completion zsh > "${fpath[1]}/_wombat"     # zsh
-wombat completion bash > /usr/local/etc/bash_completion.d/wombat
+wombat completion install --dry-run   # shows what it would do, changes nothing
+wombat completion install             # your login shell, plus other shells you have set up
+wombat completion install zsh         # or just one shell
 ```
+
+It finds your shells (your login shell, then zsh, bash and fish if they are installed and have a
+startup file) and puts a link to the script inside Wombat.app where each one looks:
+
+| Setup | Where the link goes | Startup file changed? |
+|---|---|---|
+| zsh with oh-my-zsh | `$ZSH_CUSTOM/completions/_wombat` (usually `~/.oh-my-zsh/custom/completions`) | No: oh-my-zsh adds that folder to `$fpath` before it runs `compinit`, and `custom/` is outside its git checkout, so `omz update` leaves it alone |
+| zsh, a usual folder already on `$fpath` (`~/.zsh/completions`, `~/.zfunc`, ...) | that folder | No |
+| zsh, otherwise | `~/.zsh/completions/_wombat` | Yes: one `fpath` line at the top of `~/.zshrc` (plus `compinit`, at the end, if nothing turns completion on) |
+| zsh with prezto, zinit, antidote, Zim and similar | nowhere: it explains what to add, then `--dir` | No |
+| bash with bash-completion 2 loaded | `~/.local/share/bash-completion/completions/wombat` | No |
+| bash without it (macOS's bash 3.2 too) | `~/.bash_completion.d/wombat` | Yes: one line in `~/.bashrc` if `~/.bash_profile` reads it, else in `~/.bash_profile` |
+| fish | `~/.config/fish/completions/wombat.fish` | No |
+
+- It shows any change to a startup file and asks first; `--yes` answers for you (needed when no
+  one is at the terminal). The lines sit between `# >>> wombat completion >>>` markers, and the
+  file is backed up first (`~/.zshrc.wombat-backup-<date>`). A startup file that is a symlink,
+  into a dotfiles repository say, is edited in place, not replaced.
+- When Homebrew already linked the script and the shell reads Homebrew's folder, it does nothing
+  for that shell (`--force` adds a second copy anyway).
+- It never replaces a file that isn't Wombat's unless you pass `--force`, which keeps it as a
+  backup. A copy you saved by hand earlier is moved aside (as a backup) and replaced by a link.
+- The link points into Wombat.app, so it stays current when Wombat updates itself. Run it from the
+  `wombat` inside `/Applications/Wombat.app`, not from the disk image.
+- `--dir DIR` puts the file in that folder for one shell and changes no startup file.
+- `wombat completion status` lists what is in place; `wombat completion uninstall` removes the
+  links and the marked lines it added, and nothing else.
+
+Then open a new terminal (or run `exec zsh`). If your `~/.zshrc` runs `compinit -C`, which trusts
+its cache, run `rm -f ~/.zcompdump*` once first; `install` tells you when.
+
+### With Homebrew
+
+The cask links the scripts into Homebrew's completion folders, so they only need the shell to
+look there:
+
+- **zsh:** Homebrew's own zsh already looks in `$(brew --prefix)/share/zsh/site-functions`. For
+  macOS's `/bin/zsh`, add this to `~/.zshrc` before `compinit` runs (with oh-my-zsh: before
+  `source $ZSH/oh-my-zsh.sh`, or turn on oh-my-zsh's `brew` plugin, which does the same):
+
+  ```zsh
+  FPATH="$(brew --prefix)/share/zsh/site-functions:${FPATH}"
+  ```
+
+- **bash:** install bash-completion (`brew install bash-completion@2`, which needs bash 4.2 or
+  later: `brew install bash`) and load it from `~/.bash_profile`:
+
+  ```bash
+  [[ -r "$(brew --prefix)/etc/profile.d/bash_completion.sh" ]] && . "$(brew --prefix)/etc/profile.d/bash_completion.sh"
+  ```
+
+- **fish:** nothing to do.
+
+Then open a new terminal. If zsh still doesn't complete, its cache is stale:
+`rm -f ~/.zcompdump*; exec zsh`.
+
+### By hand
+
+`wombat completion <shell>` prints the script for zsh, bash or fish.
+
+**zsh:** save it as `_wombat` in a folder on `$fpath`, before `compinit` runs:
+
+```zsh
+mkdir -p ~/.zsh/completions
+wombat completion zsh > ~/.zsh/completions/_wombat
+# in ~/.zshrc, before compinit:
+fpath=(~/.zsh/completions $fpath)
+```
+
+**oh-my-zsh:** its custom folder is already on `$fpath`:
+
+```zsh
+mkdir -p "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/completions"
+wombat completion zsh > "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/completions/_wombat"
+rm -f ~/.zcompdump*; exec zsh
+```
+
+Or, for any zsh, load it at startup (after `compinit`, so after oh-my-zsh):
+`source <(wombat completion zsh)`.
+
+**bash:** with bash-completion 2, save it where it looks for completions:
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+wombat completion bash > ~/.local/share/bash-completion/completions/wombat
+```
+
+Without bash-completion, add `eval "$(wombat completion bash)"` to `~/.bashrc` (this also works in
+macOS's bash 3.2, where files are completed by bash itself).
+
+**fish:**
+
+```fish
+wombat completion fish > ~/.config/fish/completions/wombat.fish
+```
+
+Homebrew's links and `source <(wombat completion zsh)` read the script from the app, so they stay
+current when Wombat updates itself. A copy saved by hand doesn't: save it again after an update.
 
 ## Coding agents
 
