@@ -28,6 +28,8 @@ final class BrowserSignIn: @unchecked Sendable {
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     private var answering = Set<ObjectIdentifier>()
     private var failedListeners = 0
+    private var readyListeners = 0
+    private var openedLoginPage = false
     private var continuation: CheckedContinuation<Data, Error>?
     private var done = false
 
@@ -60,7 +62,9 @@ final class BrowserSignIn: @unchecked Sendable {
                 } catch {
                     return self.finish(.failure(Failure(errorDescription: Self.portBusy)))
                 }
-                self.open(self.request.loginURL)
+                // The page opens once the listener is ready (stateUpdateHandler): opened before,
+                // a process already holding the port could still receive the browser's answer
+                // while Wombat reports the port as busy (review NEW-10).
             }
         }
     }
@@ -88,10 +92,20 @@ final class BrowserSignIn: @unchecked Sendable {
             listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
             // Port taken (another VPN client) or loopback unavailable: fail now, not wait forever.
             listener.stateUpdateHandler = { [weak self] state in
-                guard let self, case .failed = state else { return }
-                self.failedListeners += 1
-                if self.failedListeners >= self.listeners.count {
-                    self.finish(.failure(Failure(errorDescription: Self.portBusy)))
+                guard let self else { return }
+                switch state {
+                case .ready:
+                    self.readyListeners += 1
+                    if self.readyListeners == self.listeners.count, !self.openedLoginPage, !self.done {
+                        self.openedLoginPage = true
+                        self.open(self.request.loginURL)
+                    }
+                case .failed:
+                    self.failedListeners += 1
+                    if self.failedListeners >= self.listeners.count {
+                        self.finish(.failure(Failure(errorDescription: Self.portBusy)))
+                    }
+                default: break
                 }
             }
             listener.start(queue: queue)

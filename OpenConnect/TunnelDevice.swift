@@ -19,9 +19,15 @@ enum TunnelDevice {
         }
     }
 
-    /// Claims a descriptor this process made itself (the engine's dup of a utun socket).
-    static func claimExisting(_ fd: Int32) {
-        _ = lock.withLock { claimed.insert(fd) }
+    /// Duplicates a claimed utun socket for the engine and claims the copy in one step, under
+    /// the lock `claim()` takes: another tunnel's lookup in between would otherwise find the
+    /// unclaimed copy and take this tunnel's traffic (review NEW-10). -1 on failure.
+    static func duplicateAndClaim(_ fd: Int32) -> Int32 {
+        lock.withLock {
+            let copy = dup(fd)
+            if copy >= 0 { claimed.insert(copy) }
+            return copy
+        }
     }
 
     /// Closes such a descriptor and drops its claim in one step, so its number can't be reused

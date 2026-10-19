@@ -21,6 +21,18 @@ public struct Diagnostic: Equatable, Sendable, CustomStringConvertible {
 
 /// Parses and writes the wg-quick(8) file format.
 public enum WgQuick {
+    /// Whether the first section (skipping blank and comment lines) is [Interface].
+    public static func startsWithInterface(_ text: String) -> Bool {
+        for raw in text.split(whereSeparator: \.isNewline).prefix(200) {
+            var line = Substring(raw)
+            if let hash = line.firstIndex(of: "#") { line = line[..<hash] }
+            let trimmed = line.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\u{FEFF}", with: "")
+            if trimmed.isEmpty { continue }
+            return trimmed.lowercased() == "[interface]"
+        }
+        return false
+    }
+
     public struct ParseResult: Sendable {
         public let configuration: TunnelConfiguration?
         public let diagnostics: [Diagnostic]

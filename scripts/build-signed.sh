@@ -139,6 +139,30 @@ for code in "$app" "${extensions[@]}" "$app/Contents/Helpers/wombat"; do
 done
 echo "app, both extensions and CLI: Developer ID, hardened runtime, no get-task-allow or runtime exceptions, NE entitlement for system extensions"
 
+say "Checking bundle contents"
+# XcodeGen copies every file in a source folder into the bundle, gitignored ones included, so a
+# stray profile, key or CLAUDE.md would be signed and notarized in (review NEW-5). Only these
+# files may ship; Sparkle.framework is SwiftPM's and is checked by its own signature above.
+# Symlinks count too, and each extension's files are matched by exact path (a case pattern's
+# `*` would also match "/").
+contents=$(cd "$app" && find . \( -type f -o -type l \) -not -path './Contents/Frameworks/Sparkle.framework/*' | sed 's|^\./||')
+[[ "$contents" == *Contents/MacOS/Wombat* ]] || { echo "no file list for $app" >&2; exit 1; }
+allowed=$'Contents/Info.plist\nContents/PkgInfo\nContents/CodeResources\nContents/_CodeSignature/CodeResources\nContents/embedded.provisionprofile\nContents/MacOS/Wombat\nContents/Helpers/wombat\nContents/Resources/AppIcon.icns\nContents/Resources/MenuBarW.tiff\nContents/Resources/completions/_wombat\nContents/Resources/completions/wombat.bash\nContents/Resources/completions/wombat.fish'
+for ext in "${extensions[@]}"; do
+    name=$(basename "$ext")
+    base="Contents/Library/SystemExtensions/$name/Contents"
+    allowed+=$'\n'"$base/Info.plist"$'\n'"$base/embedded.provisionprofile"$'\n'"$base/_CodeSignature/CodeResources"$'\n'"$base/MacOS/${name%.systemextension}"
+    if [[ "$name" == *.openconnect.systemextension ]]; then
+        allowed+=$'\n'"$base/Resources/COPYING.LGPL"$'\n'"$base/Resources/LICENSE.openssl"
+    fi
+done
+while IFS= read -r f; do
+    found=0
+    while IFS= read -r a; do [[ "$f" == "$a" ]] && { found=1; break; }; done <<< "$allowed"
+    [[ $found -eq 1 ]] || { echo "unexpected file in the bundle (add it to this list only if it belongs): $f" >&2; exit 1; }
+done <<< "$contents"
+echo "bundle holds only the expected files"
+
 if [[ $notarize -eq 1 ]]; then
     say "Notarizing (a few minutes at Apple)"
     ditto -c -k --keepParent "$app" "$out/Wombat.zip"

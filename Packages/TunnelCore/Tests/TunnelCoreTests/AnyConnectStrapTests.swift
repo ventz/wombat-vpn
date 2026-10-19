@@ -122,4 +122,21 @@ func gatewayBlob(for client: AnyConnectStrap, token: String) throws -> Data {
                                       hasClientCertificate: false, strap: AnyConnectStrap())
         await #expect(throws: AnyConnectSignInError.externalBrowserRequired) { try await signIn.run() }
     }
+
+    /// Review NEW-1: a browser can't check a pinned certificate, so a pinned profile never
+    /// advertises the external browser and refuses a gateway that insists on it.
+    @Test func aPinnedProfileNeverUsesTheBrowser() async throws {
+        var pinned = ocTestProfile
+        pinned.serverCertificate = "sha256:" + String(repeating: "ab", count: 32)
+        #expect(!pinned.usesBrowserSignIn)
+        #expect(ocTestProfile.usesBrowserSignIn)
+        let gateway = ScriptedGateway([xmlReply(external)])
+        let signIn = AnyConnectSignIn(profile: pinned, transport: gateway,
+                                      prompts: AnyConnectPrompts(fill: { _ in nil }, singleSignOn: { _ in "" },
+                                                                 externalBrowser: { _ in Issue.record("browser used"); return Data() }),
+                                      hasClientCertificate: false, strap: AnyConnectStrap())
+        await #expect(throws: AnyConnectSignInError.externalBrowserRequiredWithPin) { try await signIn.run() }
+        let methods = gateway.requests[0].body.child("capabilities")?.children.map(\.allText)
+        #expect(methods == ["single-sign-on-v2"])
+    }
 }

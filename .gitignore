@@ -11,6 +11,7 @@ AGENTS.md
 *.key
 *.p8
 *.p12
+*.pfx
 *sparkle*key*
 secrets/
 private/

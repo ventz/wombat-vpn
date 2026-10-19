@@ -43,7 +43,9 @@ Sign in only where you expect to.
 
 If macOS doesn't trust the gateway's certificate (self-signed or a private CA), Wombat shows its
 SHA-256 fingerprint and connects only if you choose to trust it; from then on it accepts exactly
-that certificate for that VPN. Check the fingerprint with your IT department first.
+that certificate for that VPN. Check the fingerprint with your IT department first. A VPN
+with a pinned certificate always signs in inside Wombat, never in the default browser: a browser
+can't check the pin, so it could hand the sign-in to an impostor.
 
 ## What's supported
 
@@ -79,6 +81,7 @@ ServerCertificate = sha256:9b1c…   # only for a gateway macOS doesn't trust
 UserAgent = AnyConnect Darwin_i386 4.10.08029   # only if the gateway insists
 DTLS = off                         # default on
 SingleSignOn = window              # default browser: the system browser when the gateway allows it
+                                   # (never with ServerCertificate: a browser can't check a pin)
 ```
 
 The server must be `https://`. Keys that would run something (`CSDWrapper`, `Script`, `PostUp`
@@ -125,7 +128,9 @@ and the like) are refused. `wombat check work.anyconnect` lints a profile offlin
 The gateway decides the routes when the tunnel connects, so AnyConnect VPNs start with the kill
 switch off: on a split-tunnel VPN it would send everything to a gateway that drops it. Turn it on
 in the Connection tab when your gateway carries all traffic. When the gateway routes all IPv4 but
-assigns no IPv6 (or the reverse), the other family is kept inside the tunnel, never leaked.
+not all IPv6 (or the reverse), the other family is kept inside the tunnel, never leaked, by the
+same rules as WireGuard (see "Leak protection" in ARCHITECTURE.md): routing only `8000::/1`
+doesn't count as routing IPv6, and an IPv6-only gateway that routes `2000::/3` blocks IPv4.
 
 ## Troubleshooting
 

@@ -26,7 +26,12 @@ Known limits, not bugs:
   shows "Wombat" as every tunnel's server, but the tunnel names and the trusted Wi-Fi names of
   on-demand rules are in it.
 - On a shared Mac, a WireGuard tunnel with on-demand can start at the login window before anyone
-  signs in; it stops as soon as another account takes the screen.
+  signs in; it stops as soon as another account takes the screen, but not when someone signs in
+  over SSH. A tunnel you started yourself keeps running if you switch users, as macOS VPNs do.
+- On a Mac other people use, avoid combining on-demand with the kill switch: while another
+  account has the screen, Wombat refuses to restart your tunnel, and with the kill switch on,
+  macOS may hold their traffic while it keeps trying. Turn on-demand off before handing the Mac
+  over, or stop the tunnel in System Settings › VPN.
 
 For Cisco AnyConnect VPNs, also: a gateway or identity provider that can make Wombat accept the
 wrong certificate, leak a session token, run anything, or reach WireGuard keys from the

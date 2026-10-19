@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import LocalAuthentication
+import NetworkExtension
 import TunnelCore
 
 /// Answers CLI requests. Read-only and connect/disconnect requests run directly; adding a tunnel
@@ -52,6 +53,10 @@ final class ControlHandler {
             guard let name = request.name, let t = store.tunnel(named: name) else {
                 return .failure("No tunnel named \"\(request.name ?? "")\"")
             }
+            // Already up (or coming up): change nothing, only report how it settles. Connecting
+            // again would restart the tunnel (an AnyConnect VPN signs in again, maybe with a
+            // remembered SSO session) and clear other tunnels' on-demand unasked (review NEW-10).
+            let alreadyUp = request.command == .up && t.isActive
             // Disconnecting an on-demand tunnel turns its rules off: that weakens protection, so
             // the user approves it (any process running as the user can invoke the CLI).
             // The kill switch counts too: without it, traffic leaves outside the tunnel (SEC-1).
@@ -65,7 +70,7 @@ final class ControlHandler {
             // When that drops another tunnel's on-demand or kill switch, the user approves it,
             // like `down` (audits S2-M1, F-1, WOM-01, Q2-H1).
             var approved = Set<UUID>()
-            if request.command == .up, !t.isActive {
+            if request.command == .up, !alreadyUp {
                 let affected = store.tunnels.filter { $0 !== t && ($0.hasOnDemandSetting || $0.isKillSwitchActive) }
                 approved = Set(affected.map(\.id))
                 if !affected.isEmpty, !confirm(
@@ -74,9 +79,18 @@ final class ControlHandler {
                     action: "Connect") {
                     return declinedFailure("Connect")
                 }
+                // None of ours is the enabled configuration, so another VPN app's may be, and
+                // macOS turns it off when ours is enabled. Wombat can't see other apps'
+                // configurations, so it asks whenever that's possible (review NEW-4).
+                if affected.isEmpty, !(await Self.wombatIsEnabled(store)), !confirm(
+                    title: "Connect “\(t.name)”?",
+                    detail: "The wombat command asked to connect “\(t.name)”. \(Self.otherVPNWarning)",
+                    action: "Connect") {
+                    return declinedFailure("Connect")
+                }
             }
             do {
-                if request.command == .up { try await store.connect(t, source: "the wombat CLI", approved: approved) }
+                if request.command == .up { if !alreadyUp { try await store.connect(t, source: "the wombat CLI", approved: approved) } }
                 else { try await store.disconnect(t) }
                 // Report the state the request leads to once it settles (up to 10 s).
                 let target: Set<String> = request.command == .up ? ["connected"] : ["disconnected"]
@@ -110,7 +124,9 @@ final class ControlHandler {
                 let name = TunnelName.sanitize(request.name ?? "VPN")
                 // Anyone able to run the CLI could add a VPN that later receives your sign-in, so
                 // the user sees which gateway it is.
-                var detail = ["The wombat command wants to add a Cisco AnyConnect VPN.", "", "Gateway: \(String(profile.server.absoluteString.prefix(200)))"]
+                // The whole host always shows (≤ 253 characters, the registrable domain is at its
+                // end); only a long path is shortened (review NEW-3).
+                var detail = ["The wombat command wants to add a Cisco AnyConnect VPN.", "", "Gateway: \(Self.gatewayLine(profile))"]
                 if let group = profile.group { detail.append("Group: \(String(group.prefix(80)))") }
                 if let user = profile.username { detail.append("Username: \(String(user.prefix(80)))") }
                 if let sha = profile.clientCertificate {
@@ -118,7 +134,7 @@ final class ControlHandler {
                     let name = ClientIdentities.item(sha256: sha)?.name ?? "a certificate that isn't in your keychain"
                     detail.append("⚠︎ It signs in with your client certificate “\(String(name.prefix(80)))”. Only accept if this gateway should receive it.")
                 }
-                if profile.serverCertificate != nil { detail.append("⚠︎ It pins a server certificate instead of using macOS trust. Only accept if you expected this.") }
+                if let pin = profile.serverCertificate { detail.append("⚠︎ It pins a server certificate instead of using macOS trust. Only accept if you expected this.\n\(pin)") }
                 detail += ["", "You will sign in to this gateway when you connect it: make sure it's your organization's."]
                 guard confirm(title: "Add VPN “\(name)”?", detail: detail.joined(separator: "\n"), action: "Add VPN") else {
                     return declinedFailure("Import")
@@ -210,8 +226,14 @@ final class ControlHandler {
                     if rules.enabled, !others.isEmpty {
                         changes.append("turn off on-demand and kill switch protection for \(others.map { "“\($0.name)”" }.joined(separator: ", ")) (one tunnel at a time)")
                     }
+                    // Enabling ours may switch off another VPN app's configuration (review NEW-4).
+                    var warning = ""
+                    if rules.enabled, others.isEmpty, !(await Self.wombatIsEnabled(store)) {
+                        changes.append("turn on-demand on for “\(t.name)”")
+                        warning = " " + Self.otherVPNWarning
+                    }
                     if !changes.isEmpty,
-                       !confirm(title: "Change on-demand for “\(t.name)”?", detail: "The wombat command asked to \(changes.joined(separator: " and ")).", action: "Allow") {
+                       !confirm(title: "Change on-demand for “\(t.name)”?", detail: "The wombat command asked to \(changes.joined(separator: " and ")).\(warning)", action: "Allow") {
                         return declinedFailure("Change")
                     }
                     try await store.setOnDemand(t, rules)
@@ -272,6 +294,30 @@ final class ControlHandler {
         s.protection = Control.Protection(proto: t.proto)
         s.protocol = t.isOpenConnect ? "anyconnect" : t.configuration?.protocolName
         return s
+    }
+
+    /// Whether one of this user's Wombat configurations is the enabled one. If not, another VPN
+    /// app's may be, and enabling ours switches it off. Read fresh: macOS may have disabled ours
+    /// for another app's without Wombat hearing of it yet.
+    static func wombatIsEnabled(_ store: TunnelStore) async -> Bool {
+        let ours = Set(store.tunnels.map(\.id.uuidString))
+        guard let managers = try? await NETunnelProviderManager.loadAllFromPreferences() else {
+            return store.tunnels.contains { $0.manager.isEnabled }
+        }
+        return managers.contains { manager in
+            let id = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?[ProviderConfigKey.tunnelID] as? String
+            return manager.isEnabled && id.map(ours.contains) == true
+        }
+    }
+
+    static let otherVPNWarning = "If another VPN app is set up on this Mac, macOS turns its configuration off, including its on-demand rules and kill switch."
+
+    /// "https://host:port/path" with the host in full; a path over 60 characters is cut.
+    static func gatewayLine(_ profile: OpenConnectProfile) -> String {
+        var path = profile.server.path(percentEncoded: true)
+        if let query = profile.server.query(percentEncoded: true) { path += "?" + query }
+        if path.count > 60 { path = String(path.prefix(59)) + "…" }
+        return "https://\(profile.displayServer)\(path)"
     }
 
     /// Imports from the CLI could come from any process able to run our CLI, and a tunnel that
@@ -367,7 +413,7 @@ final class ControlHandler {
         approvalOpen = true
         defer { approvalOpen = false }
         let ok = await Authenticator.confirm(reason: reason)
-        if !ok { declined() }
+        if ok { declineStreak = 0 } else { declined() }
         return ok
     }
 
@@ -397,13 +443,25 @@ final class ControlHandler {
         get {
             let saved = Date(timeIntervalSince1970: UserDefaults.standard.double(forKey: "cliDeclinedUntil"))
             // A clock set back must not leave a long lockout.
-            return saved.timeIntervalSinceNow > Self.coolDown ? .distantPast : saved
+            return saved.timeIntervalSinceNow > Self.maxCoolDown ? .distantPast : saved
         }
         set { UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: "cliDeclinedUntil") }
     }
-    private static let coolDown: TimeInterval = 10
+    private static let maxCoolDown = DeclineBackoff.wait(afterDeclines: .max)
+    /// Declines in a row: each one doubles the wait (10, 20, 40 … 320 s), so a script asking
+    /// again after every cool-down gets fewer and fewer chances at a stray click (SEC-1
+    /// residual, review 1.2.1). Saved like `declinedUntil`, so a relaunch doesn't reset it; an
+    /// approval, or ten quiet minutes since the last cool-down ended, does.
+    private var declineStreak: Int {
+        get { UserDefaults.standard.integer(forKey: "cliDeclineStreak") }
+        set { UserDefaults.standard.set(newValue, forKey: "cliDeclineStreak") }
+    }
 
-    private func declined() { declinedUntil = Date().addingTimeInterval(Self.coolDown) }
+    private func declined() {
+        if declinedUntil.timeIntervalSinceNow < -2 * Self.maxCoolDown { declineStreak = 0 }
+        declineStreak = min(declineStreak + 1, 6)
+        declinedUntil = Date().addingTimeInterval(DeclineBackoff.wait(afterDeclines: declineStreak))
+    }
 
     /// Asks the user. Cancel is the default button (a stray Return must not approve), only one
     /// approval is shown at a time, and an unanswered one is declined after two minutes.
@@ -435,18 +493,25 @@ final class ControlHandler {
         RunLoop.main.add(timeout, forMode: .modalPanel)
         defer { timeout.invalidate() }
         let approved = alert.runModal() == .alertSecondButtonReturn
-        if !approved { declined() }
+        if approved { declineStreak = 0 } else { declined() }
         return approved
     }
 }
 
 enum Authenticator {
-    /// Touch ID, Apple Watch or the login password.
+    /// Touch ID, Apple Watch or the login password. Unanswered, it is canceled after two
+    /// minutes, like the approval dialogs, so it can't hold up every other CLI request (SEC-1
+    /// residual, review 1.2.1).
     @MainActor
-    static func confirm(reason: String) async -> Bool {
+    static func confirm(reason: String, timeout: Duration = .seconds(120)) async -> Bool {
         let context = LAContext()
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else { return false }
+        let expiry = Task { @MainActor in
+            try await Task.sleep(for: timeout)
+            context.invalidate()
+        }
+        defer { expiry.cancel() }
         return (try? await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) ?? false
     }
 }

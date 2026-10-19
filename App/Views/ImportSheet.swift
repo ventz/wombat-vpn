@@ -68,8 +68,9 @@ struct ImportSheet: View {
         if let lastID { model.selection = lastID }
         let added = importable.count - errors.count
         if added > 0 {
+            let cleared = errors.isEmpty && model.clearClipboardAfterImport(importable)
             NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested, userInfo: [
-                .announcement: "Imported \(added) tunnel\(added == 1 ? "" : "s")",
+                .announcement: "Imported \(added) tunnel\(added == 1 ? "" : "s")" + (cleared ? ". The clipboard was cleared, since it held the private key." : ""),
                 .priority: NSAccessibilityPriorityLevel.high.rawValue,
             ])
         }
@@ -106,10 +107,21 @@ private struct CandidateRow: View {
                         if profile.clientCertificate != nil {
                             Text("Client certificate: \(candidate.certificateName ?? "not in your keychain") (sent to this gateway)")
                         }
-                        if profile.serverCertificate != nil { Text("Server certificate: pinned") }
                     }
                     .font(.callout.monospaced())
                     .foregroundStyle(.secondary)
+                    // Same warning as the CLI prompt: a pin replaces macOS trust, so a profile
+                    // with a real hostname and someone else's pin is not harmless (review NEW-3).
+                    if let pin = profile.serverCertificate {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("It pins a server certificate instead of using macOS trust. Only import it if you expected this.")
+                                Text(pin).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                            }
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        }
+                    }
                     SuccessLabel("Valid profile. You sign in each time you connect.")
                 } else {
                     ProfileDiagnostics(result: profileResult)

@@ -131,7 +131,8 @@ AnyConnect VPNs are a second engine with the same rules, in a separate process
   require a host scan are refused during sign-in.
 - **Routes and DNS** come from the gateway (`OpenConnectNetworkPlan`): validated, capped,
   excluding everything is ignored, and a family the gateway leaves out of a full tunnel is routed
-  into the tunnel instead of leaking.
+  into the tunnel instead of leaking. "Full" is measured exactly as for WireGuard (Leak
+  protection, below).
 
 ## Trust boundaries
 
@@ -152,14 +153,20 @@ AnyConnect VPNs are a second engine with the same rules, in a separate process
   `<bundle>.cli` signed by the same team. The CLI checks the app the same way before it writes
   a request.
 - **What the CLI may do alone:** read status and stats, connect, and disconnect a tunnel without
-  on-demand. The signature proves the binary, not who launched it, so everything else asks in
-  the app: import, delete, rename, disconnecting a tunnel with on-demand or an active kill switch, connecting one tunnel when
-  that switches off another's on-demand or kill switch, turning on-demand off or narrowing it,
+  on-demand or an active kill switch. The signature proves the binary, not who launched it, so
+  everything else asks in the app: import, delete, rename, disconnecting a tunnel with on-demand
+  or an active kill switch, connecting one tunnel when that switches off another's on-demand or
+  kill switch, connecting or turning on on-demand while none of your tunnels is the enabled VPN
+  configuration (another VPN app's may be, and macOS would switch it off), turning on-demand off or narrowing it,
   trusting a Wi-Fi network, and allowing the LAN. Turning the kill switch off and exporting
   keys need Touch ID or your password. Approval dialogs default to Cancel, show one at a time,
-  and decline themselves after two minutes; after a decline (or a canceled Touch ID), new requests
-  are refused for 10 seconds, also across an app restart. macOS's own controls (System Settings,
-  `scutil --nc stop`) can always stop a tunnel; the app can't gate those.
+  and decline themselves after two minutes, as do Touch ID requests; after a decline (or a
+  canceled Touch ID), new requests are refused for 10 seconds, doubling with each decline in a
+  row up to about five minutes, also across an app restart. The CLI refuses an app older than
+  itself, and the app replaces its system extensions only with a newer build. macOS's own controls (System Settings,
+  `scutil --nc stop`) can stop a tunnel; the app can't gate those. They can only stop a tunnel
+  that is running, so on a shared Mac an on-demand tunnel whose restarts Wombat refuses (another
+  account has the screen) can leave nothing to stop; see SECURITY.md.
 
 ## Leak protection
 
@@ -167,12 +174,16 @@ AnyConnect VPNs are a second engine with the same rules, in a separate process
   measured on merged ranges. That way `0.0.0.0/1, 128.0.0.0/1` counts as a full tunnel, just like
   `0.0.0.0/0`, while `8000::/1` (half of IPv6, none of the internet) doesn't.
 - **Address-family leaks:** when one family is full-tunneled and the other isn't (only
-  `0.0.0.0/0`), the other family is routed into the tunnel too. wireguard-go has no peer for it
+  `0.0.0.0/0`), the other family is routed into the tunnel too. IPv6 stays outside only when
+  it's mostly routed both as internet IPv6 and as the whole space: `0.0.0.0/0, 2000::/3` still
+  routes all IPv6 in, or NAT64's `64:ff9b::/96` (IPv4 sites over IPv6) would leave outside.
+  NAT64 itself must be routed too, in every full tunnel, IPv6-only ones included: otherwise
+  the rest of IPv6 is routed in. wireguard-go has no peer for it
   and drops it, so IPv6 is blocked while connected rather than revealing your real address.
   A family that has routes but no interface address gets a placeholder address (a fixed ULA, or
   192.0.0.8), so its routes take effect.
-- **Kill switch** (`includeAllNetworks`) is on by default for full-tunnel imports, with the local
-  network blocked. That defends against routes the local network controls: DHCP option 121
+- **Kill switch** (`includeAllNetworks`) is on by default for full-tunnel imports, and for a split
+  tunnel edited into a full one, with the local network blocked. That defends against routes the local network controls: DHCP option 121
   (TunnelVision, CVE-2024-3661) and spoofed local subnets (TunnelCrack LocalNet, CVE-2023-36672).
   "Allow local network" is a per-tunnel opt-in.
 - **DNS:** with DNS servers set, all lookups go to them (`matchDomains = [""]`). The review warns
@@ -215,7 +226,12 @@ Config files, zips and CLI requests can come from anyone:
 - Review findings are capped per kind and computed once per config, so a hostile file with
   thousands of peers can't stall the app.
 - Tunnel names are stripped of control and bidi characters before they reach menus or the
-  terminal.
+  terminal. So are file names shown in the import review, where a file another app opened in
+  Wombat is labeled "Opened from outside Wombat"; such files are refused while an import from
+  inside Wombat (camera, a picture still decoding) is under way.
+- After an import from the clipboard, Wombat clears the clipboard if it still holds what was
+  read (a WireGuard configuration carries its private key).
+- A QR code counts as a configuration only when its first section is `[Interface]`.
 - AmneziaWG settings (`TunnelCore/Amnezia.swift`) are checked against Wombat's own limits,
   stricter than the engine's: at most 128 junk packets of at most 1500 bytes, paddings that keep
   each handshake message within 1280 bytes, non-overlapping header values, and signature packets

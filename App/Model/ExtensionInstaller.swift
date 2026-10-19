@@ -64,8 +64,13 @@ extension ExtensionInstaller: OSSystemExtensionRequestDelegate {
         // Local builds keep the same version number, so always install the one just built.
         return .replace
         #else
-        // Replace whenever the build differs, including a downgrade to a release build after testing.
-        return existing.bundleVersion == ext.bundleVersion && existing.bundleShortVersion == ext.bundleShortVersion ? .cancel : .replace
+        // Replace only with a newer build. An older notarized Wombat, launched from anywhere by a
+        // same-user process, would otherwise put back its older extension and its fixed bugs
+        // (review NEW-10). Release builds always carry a higher build number than the test
+        // builds before them (CLAUDE.md, pitfall 11). Rolling back means removing the extension
+        // first (System Settings › General › Login Items & Extensions).
+        let installed = Int(existing.bundleVersion) ?? 0, offered = Int(ext.bundleVersion) ?? 0
+        return offered > installed ? .replace : .cancel
         #endif
     }
 

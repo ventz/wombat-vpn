@@ -12,11 +12,14 @@ public struct RouteCoverage: Equatable, Sendable {
     public let ipv6: Double
     /// 0...1 of the whole IPv6 space, ULA, link-local and NAT64 (64:ff9b::/96) included.
     public let ipv6Space: Double
+    /// 0...1 of NAT64's 64:ff9b::/96, where IPv4 sites are reached over IPv6.
+    public let nat64: Double
 
     public init(_ ranges: [IPAddressRange]) {
         ipv4 = Self.fraction(ranges.filter { $0.family == .v4 }, bits: 32)
         ipv6 = Self.fraction(ranges.filter { $0.family == .v6 }, bits: 128, within: Self.globalUnicast)
         ipv6Space = Self.fraction(ranges.filter { $0.family == .v6 }, bits: 128)
+        nat64 = Self.fraction(ranges.filter { $0.family == .v6 }, bits: 128, within: Self.nat64Prefix)
     }
 
     /// Whether the IPv6 the tunnel doesn't route should be blocked (routed into the tunnel, where
@@ -24,12 +27,17 @@ public struct RouteCoverage: Equatable, Sendable {
     /// BOTH measures is it left alone: `2000::/3` covers all internet IPv6 but not NAT64's
     /// `64:ff9b::/96` (IPv4 sites reached over IPv6), which would then leave outside the tunnel
     /// (security-6 L2); `8000::/1` covers half the space and no internet address (SEC-5).
-    public var blocksUncoveredIPv6: Bool { routesMostIPv4 && !(routesMostIPv6 && ipv6Space >= 0.5) }
+    /// NAT64 must be routed too: `0.0.0.0/0, 2000::/3, 8000::/1` passes both measures yet
+    /// leaves 64:ff9b::/96 neither routed nor blocked, and so does an IPv6 full tunnel of
+    /// `2000::/3` alone, whose IPv4 is blocked (review NEW-10).
+    public var blocksUncoveredIPv6: Bool { isFullTunnel && !(routesMostIPv6 && ipv6Space >= 0.5 && nat64 >= 1) }
     /// The other way round: an IPv6 full tunnel blocks the IPv4 it doesn't route.
     public var blocksUncoveredIPv4: Bool { routesMostIPv6 && !routesMostIPv4 }
 
     /// 2000::/3 as an inclusive interval.
     static let globalUnicast: (UInt128, UInt128) = (UInt128(0x2000) << 112, (UInt128(0x4000) << 112) - 1)
+    /// 64:ff9b::/96 as an inclusive interval.
+    static let nat64Prefix: (UInt128, UInt128) = ((UInt128(0x64) << 112) | (UInt128(0xff9b) << 96), ((UInt128(0x64) << 112) | (UInt128(0xff9b) << 96)) + (UInt128(1) << 32) - 1)
 
     /// Routes at least half of the family's space: treated as a full tunnel for warnings.
     /// (Typical "everything except my LAN" configs cover ~99%.)

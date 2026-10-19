@@ -56,9 +56,11 @@ public enum ConfigReview {
         let allRoutes = c.peers.flatMap(\.allowedIPs)
         let coverage = RouteCoverage(allRoutes)
         if coverage.isFullTunnel {
-            let what = coverage.routesMostIPv4 && coverage.routesMostIPv6 ? "IPv4 and IPv6"
-                : coverage.routesMostIPv4 ? "IPv4" : "IPv6"
-            add(.info, "full-tunnel", "Routes \(RouteCoverage.describe(max(coverage.ipv4, coverage.ipv6))) of \(what) traffic through this tunnel")
+            // Each family's own share: the larger one stood in for both (review NEW-10).
+            let what = coverage.routesMostIPv4 && coverage.routesMostIPv6
+                ? "\(RouteCoverage.describe(coverage.ipv4)) of IPv4 and \(RouteCoverage.describe(coverage.ipv6)) of internet IPv6"
+                : coverage.routesMostIPv4 ? "\(RouteCoverage.describe(coverage.ipv4)) of IPv4" : "\(RouteCoverage.describe(coverage.ipv6)) of internet IPv6"
+            add(.info, "full-tunnel", "Routes \(what) traffic through this tunnel")
             if c.interface.dnsServers.isEmpty {
                 add(.risk, "dns-leak", "Routes most traffic but sets no DNS: name lookups still go to the local network's resolver")
             }

@@ -181,7 +181,10 @@ struct TunnelActionItems: View {
             Button("Forget Sign-In Data") {
                 select()
                 Task {
-                    await SSODataStore.remove(tunnel.id)
+                    guard await SSODataStore.remove(tunnel.id) else {
+                        model.actionError = "Wombat couldn't remove the sign-in data for \(tunnel.name). Close its sign-in, then try again."
+                        return
+                    }
                     NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested, userInfo: [
                         .announcement: "Sign-in data for \(tunnel.name) removed. Your identity provider will ask you to sign in again.",
                         .priority: NSAccessibilityPriorityLevel.medium.rawValue,

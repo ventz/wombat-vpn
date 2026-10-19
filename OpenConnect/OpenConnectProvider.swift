@@ -56,10 +56,12 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
     private func begin(id: String, revision: String?, handOffTimedOut: Bool, completionHandler: @escaping (Error?) -> Void) {
         let engine: OpenConnectEngine
         let session: AnyConnectSession
+        var ownerChecked = false
         do {
             if isStopped { throw OpenConnectError.canceled }
             guard let text = store.config(for: id) else { throw OpenConnectError.notHandedOver }
             try checkOwner(id)
+            ownerChecked = true
             // Never start from a profile older than the configuration (fail closed; S3-M1/M2).
             if let revision, store.revision(of: id) != .some(revision) {
                 throw handOffTimedOut ? OpenConnectError.handOffTimedOut : OpenConnectError.outdatedCopy
@@ -78,7 +80,13 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
                 self?.engineLog(level, message)
             }
         } catch {
-            fail("Cannot start: \(error.localizedDescription)", error, completionHandler)
+            // A session handed over for a start that is refused here goes now, not at its
+            // 10-minute expiry (review NEW-10). Only once the owner is known to have asked: the
+            // session is the owner's, maybe for a start of their own that is on its way.
+            if ownerChecked { store.dropSession(for: id) }
+            // The label is fixed and public; the error, which can name the gateway, stays
+            // private in the system log (SEC-10, review NEW-10).
+            fail("Cannot start", error, completionHandler)
             return
         }
         // Published before connecting, so a stop can cancel a connect in progress; a stop that
@@ -100,7 +108,7 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
             plan = try OpenConnectNetworkPlan.make(info)
         } catch {
             teardown(id, engine)
-            fail("Connection failed: \(error.localizedDescription)", error is OpenConnectNetworkPlan.Failure ? OpenConnectError.engine(error.localizedDescription) : error, completionHandler)
+            fail("Connection failed", error is OpenConnectNetworkPlan.Failure ? OpenConnectError.engine(error.localizedDescription) : error, completionHandler)
             return
         }
         if isStopped {
@@ -110,6 +118,9 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
         self.plan = plan
         engine.onReconnected = { [weak self] info in self?.reapply(info) }
         note("Connected to the gateway; \(plan.ipv4Included.count + plan.ipv6Included.count) route(s), \(plan.dnsServers.count) DNS server(s)\(plan.blockedIPv6 ? ", IPv6 kept inside the tunnel" : "")")
+        if !plan.dropped.isEmpty {
+            note("The gateway sent more than Wombat accepts. Left out: \(plan.dropped.joined(separator: "; ")).")
+        }
 
         setTunnelNetworkSettings(Self.networkSettings(plan, remote: session.address)) { [weak self] error in
             self?.queue.async { [weak self] in
@@ -325,8 +336,10 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
         completionHandler(error)
     }
 
-    /// Engine lines name the gateway and addresses: private in the system log.
+    /// Engine lines name the gateway and addresses: private in the system log. Some carry text
+    /// the gateway sent (the CONNECT status line, X-Reason), cleaned to one line (review NEW-8).
     private func engineLog(_ level: Int32, _ message: String) {
+        let message = TunnelName.line(message)
         if level == PRG_ERR { log.error("engine: \(message, privacy: .private)") } else { log.debug("engine: \(message, privacy: .private)") }
         recentLog.append(message)
     }

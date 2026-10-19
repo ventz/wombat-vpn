@@ -161,6 +161,19 @@ public enum TunnelName {
         return capped.isEmpty ? "Tunnel" : capped
     }
 
+    /// Text from outside (a gateway, a file) shown as one line in the Log tab or a terminal:
+    /// control and format characters (escape sequences, carriage returns, bidi overrides) and
+    /// line or paragraph separators become spaces, so it can't pose as more lines or as
+    /// Wombat's own (review NEW-8). Unlike `sanitize`, nothing is collapsed or cut.
+    public static func line(_ raw: String) -> String {
+        String(String.UnicodeScalarView(raw.unicodeScalars.map { s in
+            switch s.properties.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator: return " "
+            default: return s
+            }
+        }))
+    }
+
     /// "Home" → "Home 2" while the name is taken (case-insensitive).
     public static func unique(_ name: String, existing: [String]) -> String {
         let taken = Set(existing.map { $0.lowercased() })

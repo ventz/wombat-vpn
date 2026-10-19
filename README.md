@@ -80,12 +80,11 @@ app for your own WireGuard servers and your work or campus VPN, no Cisco client 
 Or with [Homebrew](https://brew.sh), which also puts the `wombat` command on your `PATH`:
 
 ```bash
-brew trust --cask ventz/tap/wombat-wireguard
 brew install --cask ventz/tap/wombat-wireguard
 ```
 
-Homebrew 7 and later only load casks from third-party taps you have trusted. The first line trusts
-just this cask; `brew trust --tap ventz/tap` trusts the whole tap instead. Skip it on older Homebrew.
+Since Homebrew 6, casks from third-party taps must be trusted; installing by the full name, as
+above, trusts just this cask. `brew trust --tap ventz/tap` would trust the whole tap instead.
 
 Wombat is signed with a Developer ID, notarized by Apple, and updates itself. Requires macOS 15
 or later (Apple silicon or Intel).
@@ -102,7 +101,8 @@ scripts/build-signed.sh --install
 ## Features
 
 - **Import anything:** drag in `.conf` files, a zip of them, or paste from the clipboard. Every
-  import shows where traffic will go and what's risky before anything is saved.
+  import shows where traffic will go and what's risky before anything is saved, and an import
+  from the clipboard clears it afterwards, since a configuration holds its private key.
 - **Cisco AnyConnect:** add a VPN by its gateway address and sign in the way your organization
   does: password, Duo (push, call or passcode), SAML single sign-on in your default browser
   (passkeys and password managers work) or inside Wombat, or a keychain certificate. The
@@ -172,7 +172,7 @@ Security is the first design goal, ahead of speed and convenience.
   tunnel edited while the extension wasn't running never starts from its old configuration.
 - **Safe on shared Macs.** VPN settings are system-wide, but each macOS user sees and starts only
   their own tunnels. (An on-demand tunnel may come up at the login window before anyone signs in,
-  and stops when another account signs in.)
+  and stops when another account takes the screen; a sign-in over SSH doesn't stop it.)
 - **AnyConnect is walled off.** OpenConnect's C code runs in a second system extension, a
   separate sandboxed process that never holds a WireGuard key. Sign-in is Wombat's own Swift
   code: client certificates are used through the keychain (the private key never leaves it), the

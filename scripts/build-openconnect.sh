@@ -73,16 +73,25 @@ for fn in fork execv execvp execve execl execlp posix_spawn posix_spawnp system;
     NOEXEC_DEFINES+=" -D$fn=wombat_noexec_$fn"
 done
 
+# Hardening for both libraries, which parse what a gateway sends: Apple clang's default stack
+# protector covers only some functions, and zeroed locals turn uninitialized reads into
+# predictable ones (review NEW-10).
+HARDEN="-fstack-protector-strong -ftrivial-auto-var-init=zero"
+# No engines, dynamic modules, legacy provider, apps or docs: openconnect needs none of them,
+# and a static library can't load modules anyway.
+OSSL_OPTIONS="no-shared no-module no-dso no-engine no-legacy no-apps no-docs no-tests no-ui-console no-comp"
+
 for arch in $ARCHS; do
     case "$arch" in
         arm64) ossl_target=darwin64-arm64-cc; host=aarch64-apple-darwin ;;
         x86_64) ossl_target=darwin64-x86_64-cc; host=x86_64-apple-darwin ;;
         *) echo "build-openconnect: unknown arch $arch" >&2; exit 1 ;;
     esac
-    flags="-isysroot $SDK -arch $arch -mmacosx-version-min=$MACOS_MIN"
+    flags="-isysroot $SDK -arch $arch -mmacosx-version-min=$MACOS_MIN $HARDEN"
     dir="$WORK/$arch"
     # OpenSSL takes most of the time and changes least: rebuilt only when its inputs change.
-    ossl_stamp="$(echo "$OPENSSL_VERSION $flags" | shasum -a 256 | cut -d' ' -f1)"
+    # Everything that shapes the archive: version, flags and Configure options (review NEW-10).
+    ossl_stamp="$(echo "$OPENSSL_VERSION $flags -O2 $ossl_target $OSSL_OPTIONS" | shasum -a 256 | cut -d' ' -f1)"
     if [[ -f "$dir/prefix/lib/libcrypto.a" && "$(cat "$dir/.openssl-stamp" 2>/dev/null)" == "$ossl_stamp" ]]; then
         command rm -rf "$dir/openconnect-$OPENCONNECT_VERSION"
     else
@@ -92,10 +101,8 @@ for arch in $ARCHS; do
     echo "build-openconnect: OpenSSL $OPENSSL_VERSION ($arch)"
     tar -xzf "$DOWNLOADS/openssl-$OPENSSL_VERSION.tar.gz" -C "$dir"
     ossl="$dir/openssl-$OPENSSL_VERSION"
-    # No engines, dynamic modules, legacy provider, apps or docs: openconnect needs none of them,
-    # and a static library can't load modules anyway.
-    (cd "$ossl" && CC=clang CFLAGS="$flags -O2" ./Configure "$ossl_target" no-shared no-module no-dso \
-        no-engine no-legacy no-apps no-docs no-tests no-ui-console no-comp \
+    # shellcheck disable=SC2086  # OSSL_OPTIONS is a word list on purpose
+    (cd "$ossl" && CC=clang CFLAGS="$flags -O2" ./Configure "$ossl_target" $OSSL_OPTIONS \
         --prefix="$dir/prefix" --openssldir=/nonexistent/openssl >"$dir/openssl-configure.log" 2>&1 \
         && make -j"$JOBS" build_libs >"$dir/openssl-build.log" 2>&1 \
         && make install_dev >"$dir/openssl-install.log" 2>&1) \

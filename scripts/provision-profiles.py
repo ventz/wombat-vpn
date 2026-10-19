@@ -15,8 +15,8 @@ profile for each against the Developer ID Application certificate, and writes th
 build/profiles/ (gitignored). Profiles aren't secret, but they're per-team, so they stay out of
 the repo.
 
-    uv run scripts/provision-profiles.py
-    WOMBAT_BUNDLE_ID=org.example.wombat uv run scripts/provision-profiles.py   # a fork
+    uv run --locked scripts/provision-profiles.py
+    WOMBAT_BUNDLE_ID=org.example.wombat uv run --locked scripts/provision-profiles.py   # a fork
 
 Env (required): ASC_KEY_ID, ASC_ISSUER_ID; optional ASC_KEY_PATH (default
 ~/.appstoreconnect/private_keys/AuthKey_<id>.p8). The key needs the Admin or App Manager role:

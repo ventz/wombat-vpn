@@ -597,6 +597,32 @@ final class Recorder: @unchecked Sendable {
         #expect(plan.isFullTunnelIPv4 && plan.blockedIPv6)  // half the space: IPv6 kept inside
     }
 
+    /// Review NEW-7: IPv6 is measured the way WireGuard's RouteCoverage measures it.
+    @Test func ipv6IsMeasuredAgainstInternetIPv6() throws {
+        func plan(_ includes: [String], v4: Bool = true) throws -> OpenConnectNetworkPlan {
+            var info = OpenConnectIPInfo()
+            if v4 { info.address = "10.8.0.5" }
+            info.netmask6 = "fd00:8::5/64"
+            info.splitIncludes = includes
+            return try OpenConnectNetworkPlan.make(info)
+        }
+        // Full IPv4 plus 8000::/1: half the space but no internet address, so IPv6 goes in.
+        var p = try plan(["0.0.0.0/0.0.0.0", "8000::/1"])
+        #expect(p.ipv6Included.first?.prefixLength == 0)
+        // Full IPv4 plus 2000::/3: all internet IPv6, but NAT64's 64:ff9b::/96 would stay
+        // outside, so IPv6 still goes in whole (security-6 L2).
+        p = try plan(["0.0.0.0/0.0.0.0", "2000::/3"])
+        #expect(p.isFullTunnelIPv6)
+        #expect(p.ipv6Included.first?.prefixLength == 0)
+        // Full IPv4 and all of IPv6: left as the gateway sent it.
+        p = try plan(["0.0.0.0/0.0.0.0", "::/0"])
+        #expect(p.ipv6Included.first?.prefixLength == 0 && !p.blockedIPv6)
+        // An IPv6-only gateway pushing 2000::/3: IPv4 is blocked, not left outside.
+        p = try plan(["2000::/3"], v4: false)
+        #expect(p.isFullTunnelIPv6 && p.blockedIPv4)
+        #expect(p.ipv4Included.first?.prefixLength == 0)
+    }
+
     @Test func maskHelpers() {
         #expect(OpenConnectNetworkPlan.prefixLength(ofMask: "255.255.240.0") == 20)
         #expect(OpenConnectNetworkPlan.prefixLength(ofMask: "0.0.0.0") == 0)

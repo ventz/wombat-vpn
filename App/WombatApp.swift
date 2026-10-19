@@ -56,6 +56,9 @@ final class AppModel: ObservableObject {
     /// Activated only once there is an AnyConnect VPN (TunnelStore.needsOpenConnect).
     let openConnectInstaller = OpenConnectInstaller()
     @Published var pendingImport: [ImportCandidate] = []
+    /// True while dropped, chosen or pasted files are being read or decoded, before the review
+    /// opens: nothing else may fill the review in that gap (review NEW-2).
+    private var stagingImport = false
     @Published var selection: UUID?
     @Published var showingQR = false
     @Published var showingScanner = false
@@ -81,13 +84,22 @@ final class AppModel: ObservableObject {
     /// neither (A-L6).
     func importFromClipboard() {
         let text = NSPasteboard.general.string(forType: .string) ?? ""
+        clipboardReadAt = NSPasteboard.general.changeCount
         // Text that is a configuration wins; an image copied from a browser can come with its URL.
         if text.range(of: "[Interface]", options: .caseInsensitive) == nil, let data = QRReader.clipboardImageData() {
+            guard pendingImport.isEmpty, !stagingImport else { return busy() }
+            // Held like a dropped picture while it decodes, so nothing else fills the review
+            // meanwhile (security review L1).
+            stagingImport = true
             Task {
                 do {
                     let configs = try await QRReader.configurations(inImageData: data, source: "The clipboard image")
-                    present(Self.candidates(configs, base: "QR Code", source: "QR code (clipboard)"))
+                    stagingImport = false
+                    present(Self.candidates(configs, base: "QR Code", source: "QR code (clipboard)").map {
+                        var c = $0; c.fromClipboard = true; return c
+                    })
                 } catch {
+                    stagingImport = false
                     actionError = error.localizedDescription
                 }
             }
@@ -97,7 +109,21 @@ final class AppModel: ObservableObject {
             actionError = "The clipboard has no text or QR code to import. Copy a WireGuard configuration or a picture of its QR code first."
             return
         }
-        stageImport(text: text, name: "Clipboard")
+        stageImport(text: text, name: "Clipboard", fromClipboard: true)
+    }
+
+    /// The clipboard's changeCount when Wombat read a configuration from it.
+    private var clipboardReadAt: Int?
+
+    /// After a clipboard import: a WireGuard configuration (text, or a QR picture) holds the
+    /// private key, so the clipboard is cleared, but only if nothing was copied since Wombat read
+    /// it (review NEW-10). Returns whether it was cleared.
+    func clearClipboardAfterImport(_ imported: [ImportCandidate]) -> Bool {
+        defer { clipboardReadAt = nil }
+        guard let readAt = clipboardReadAt, NSPasteboard.general.changeCount == readAt,
+              imported.contains(where: { $0.fromClipboard && $0.parse.configuration != nil }) else { return false }
+        NSPasteboard.general.clearContents()
+        return true
     }
 
     /// Rename with a native alert: focus starts in the field, Return renames, Escape cancels.
@@ -230,13 +256,25 @@ final class AppModel: ObservableObject {
 
     /// Reads dropped or chosen files (.conf, or a .zip such as the official app's export) and
     /// stages them for the import sheet. Nothing is saved until the user confirms there.
-    func stageImport(_ urls: [URL]) {
-        Task { await stageImportAsync(urls) }
+    /// `fromAnotherApp`: opened with `open -a Wombat` or from another app, not by the user inside
+    /// Wombat. Such files are labeled as such, and refused while an in-app import (the camera,
+    /// a picture still decoding) is under way, so they can't step into its place (review NEW-2).
+    func stageImport(_ urls: [URL], fromAnotherApp: Bool = false) {
+        Task { await stageImportAsync(urls, fromAnotherApp: fromAnotherApp) }
     }
 
-    private func stageImportAsync(_ urls: [URL]) async {
-        guard pendingImport.isEmpty else { return busy() }
+    private func stageImportAsync(_ urls: [URL], fromAnotherApp: Bool) async {
+        // A camera result waits in scannedConfig from the scanner's dismissal until its onDismiss
+        // stages it: that gap counts as the scanner being open (security review L1).
+        guard pendingImport.isEmpty, !stagingImport, !(fromAnotherApp && (showingScanner || scannedConfig != nil)) else { return busy() }
+        stagingImport = true
         var candidates: [ImportCandidate] = []
+        // File names are untrusted: cleaned like tunnel names, and marked when another app sent
+        // them, so a file can't pass for "QR code (camera)" or "Clipboard" (review NEW-2).
+        func source(_ name: String) -> String {
+            let clean = TunnelName.sanitize(name)
+            return fromAnotherApp ? "Opened from outside Wombat: \(clean)" : clean
+        }
         for url in urls {
             do {
                 if QRReader.isImage(url) {
@@ -244,7 +282,7 @@ final class AppModel: ObservableObject {
                     let data = try Self.withAccess(url) { try Self.readBounded(url, limit: QRReader.maxImageBytes) }
                     let configs = try await QRReader.configurations(inImageData: data, source: url.lastPathComponent)
                     candidates += Self.candidates(configs, base: TunnelName.from(fileName: url.deletingPathExtension().lastPathComponent),
-                                                  source: "QR code in \(url.lastPathComponent)")
+                                                  source: source("QR code in \(url.lastPathComponent)"))
                     continue
                 }
                 let accessing = url.startAccessingSecurityScopedResource()
@@ -252,28 +290,31 @@ final class AppModel: ObservableObject {
                 if url.pathExtension.lowercased() == "zip" {
                     let data = try Self.readBounded(url, limit: ZipReader.maxArchiveBytes)
                     for entry in try ZipReader.confEntries(data) {
-                        candidates.append(ImportCandidate(name: TunnelName.from(fileName: entry.name), text: entry.text, source: url.lastPathComponent))
+                        candidates.append(ImportCandidate(name: TunnelName.from(fileName: entry.name), text: entry.text, source: source(url.lastPathComponent)))
                     }
                 } else {
                     let data = try Self.readBounded(url, limit: max(WgQuick.maxBytes, OpenConnectFile.maxBytes))
                     guard let text = String(data: data, encoding: .utf8) else { throw StoreError.invalid("\(url.lastPathComponent) is not UTF-8 text") }
-                    candidates.append(ImportCandidate(name: TunnelName.from(fileName: url.lastPathComponent), text: text, source: url.lastPathComponent))
+                    candidates.append(ImportCandidate(name: TunnelName.from(fileName: url.lastPathComponent), text: text, source: source(url.lastPathComponent)))
                 }
             } catch {
-                candidates.append(ImportCandidate(name: TunnelName.from(fileName: url.lastPathComponent), text: "", source: url.lastPathComponent, readError: error.localizedDescription))
+                candidates.append(ImportCandidate(name: TunnelName.from(fileName: url.lastPathComponent), text: "", source: source(url.lastPathComponent), readError: error.localizedDescription))
             }
         }
+        stagingImport = false
         present(candidates)
     }
 
-    func stageImport(text: String, name: String, source: String = "Clipboard") {
-        present([ImportCandidate(name: TunnelName.sanitize(name), text: text, source: source)])
+    func stageImport(text: String, name: String, source: String = "Clipboard", fromClipboard: Bool = false) {
+        var candidate = ImportCandidate(name: TunnelName.sanitize(name), text: text, source: source)
+        candidate.fromClipboard = fromClipboard
+        present([candidate])
     }
 
     /// Opens the import review, unless one is already open: a new import (a drop, ⇧⌘V, a file
     /// another app opens in Wombat) must not change the list under review (security-5 L2/N4).
     private func present(_ candidates: [ImportCandidate]) {
-        guard pendingImport.isEmpty else { return busy() }
+        guard pendingImport.isEmpty, !stagingImport else { return busy() }
         pendingImport = candidates
     }
 
@@ -306,6 +347,8 @@ struct ImportCandidate: Identifiable {
     let source: String
     var readError: String?
     var include = true
+    /// Read from the clipboard, which may then still hold the private key.
+    var fromClipboard = false
     /// Parsed and reviewed once, not on every render: a hostile file must not cost per frame.
     let parse: WgQuick.ParseResult
     let findings: [Finding]
@@ -391,7 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        MainActor.assumeIsolated { AppModel.shared.stageImport(urls) }
+        MainActor.assumeIsolated { AppModel.shared.stageImport(urls, fromAnotherApp: true) }
     }
 
     /// Right-click the Dock icon: every tunnel with a checkmark when connected; choosing one

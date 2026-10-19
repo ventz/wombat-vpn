@@ -95,7 +95,8 @@ Task {
     do {
         // STRAP keys on, as the app sends them (the gateway may ignore them; the tunnel must
         // still take the key: libopenconnect logs an error if it can't decode it).
-        let strap = AnyConnectStrap()
+        // As the app does: no browser sign-in, so no STRAP keys, with a pinned certificate (NEW-1).
+        let strap = profile.usesBrowserSignIn ? AnyConnectStrap() : nil
         let signIn = AnyConnectSignIn(profile: profile, transport: URLSessionGatewayTransport(profile: profile, identity: identity, strap: strap),
             prompts: AnyConnectPrompts(fill: { prompt in
                 print("sign-in: \(prompt.message ?? "(form)")")

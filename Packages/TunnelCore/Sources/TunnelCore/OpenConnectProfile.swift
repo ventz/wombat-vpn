@@ -32,6 +32,11 @@ public struct OpenConnectProfile: Equatable, Sendable {
     /// managers, an existing identity-provider session); off: always Wombat's sign-in window.
     public var ssoInBrowser: Bool
 
+    /// Whether sign-in may go through the default browser. Never with a pinned certificate: the
+    /// browser knows nothing of the pin, so it would post the SAML assertion to whoever answered
+    /// (review NEW-1). Wombat's own sign-in view enforces the pin.
+    public var usesBrowserSignIn: Bool { ssoInBrowser && serverCertificate == nil }
+
     public init(server: URL, group: String? = nil, username: String? = nil, clientCertificate: String? = nil,
                 serverCertificate: String? = nil, userAgent: String? = nil, dtls: Bool = true, ssoInBrowser: Bool = true) {
         self.server = server

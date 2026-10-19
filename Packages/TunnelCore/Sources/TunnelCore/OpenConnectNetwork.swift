@@ -16,6 +16,10 @@ public struct OpenConnectIPInfo: Equatable, Sendable {
     public var splitIncludes: [String] = []
     public var splitExcludes: [String] = []
     public var mtu: Int = 0
+    /// The gateway sent more split routes, or split-DNS entries, than `maxRoutes`; the engine
+    /// kept the first ones it found.
+    public var routesTruncated = false
+    public var splitDNSTruncated = false
 
     public init() {}
 }
@@ -47,6 +51,9 @@ public struct OpenConnectNetworkPlan: Equatable, Sendable {
     /// protection), with a reserved placeholder address.
     public var blockedIPv6 = false
     public var blockedIPv4 = false
+    /// Gateway settings left out at the caps, each with what it means, for the Log tab
+    /// (review NEW-10).
+    public var dropped: [String] = []
 
     /// "Full" the way the WireGuard engine counts it (CLAUDE.md #10): routes covering at least
     /// half the family, so 0.0.0.0/1 + 128.0.0.0/1 counts, not only a literal /0.
@@ -54,16 +61,37 @@ public struct OpenConnectNetworkPlan: Equatable, Sendable {
     /// carries nothing.
     /// The share of the address space that really goes into the tunnel: the included set minus
     /// the excluded set, as address ranges (not a difference of percentages; S5C-M4).
+    /// IPv6 is measured like RouteCoverage measures it for WireGuard (review NEW-7): against
+    /// internet IPv6 (2000::/3), so `8000::/1` (half the space, no internet address) is not
+    /// full and `2000::/3` is.
     public var isFullTunnelIPv4: Bool { Self.netShare(ipv4Included, minus: ipv4Excluded, bits: 32) >= 0.5 }
-    public var isFullTunnelIPv6: Bool { Self.netShare(ipv6Included, minus: ipv6Excluded, bits: 128) >= 0.5 }
+    public var isFullTunnelIPv6: Bool {
+        Self.netShare(ipv6Included, minus: ipv6Excluded, bits: 128, within: RouteCoverage.globalUnicast) >= 0.5
+    }
+    /// Most of the whole IPv6 space, NAT64's 64:ff9b::/96 and ULAs included.
+    var routesMostIPv6Space: Bool { Self.netShare(ipv6Included, minus: ipv6Excluded, bits: 128) >= 0.5 }
 
-    static func netShare(_ included: [Route], minus excluded: [Route], bits: Int) -> Double {
+    /// The IPv6 to route into the tunnel because IPv4 is a full tunnel: unless IPv6 is mostly
+    /// routed by BOTH measures, as RouteCoverage.blocksUncoveredIPv6 decides for WireGuard.
+    /// `2000::/3` alone would leave NAT64 (IPv4 sites over IPv6) outside (security-6 L2).
+    /// Also for an IPv6 full tunnel that leaves NAT64 out (review NEW-10).
+    var blocksUncoveredIPv6: Bool {
+        (isFullTunnelIPv4 || isFullTunnelIPv6) && !(isFullTunnelIPv6 && routesMostIPv6Space
+            && Self.netShare(ipv6Included, minus: ipv6Excluded, bits: 128, within: RouteCoverage.nat64Prefix) >= 1)
+    }
+    var blocksUncoveredIPv4: Bool { isFullTunnelIPv6 && !isFullTunnelIPv4 }
+
+    /// The share of `within` (inclusive bounds; default the whole family) that the included
+    /// routes minus the excluded ones cover.
+    static func netShare(_ included: [Route], minus excluded: [Route], bits: Int, within: (UInt128, UInt128)? = nil) -> Double {
         func intervals(_ routes: [Route]) -> [(UInt128, UInt128)] {
-            routes.compactMap(\.range).map { r in
+            routes.compactMap(\.range).compactMap { r in
                 let start = RouteCoverage.value(r.network.address)
                 let hostBits = bits - Int(r.prefixLength)
                 let span: UInt128 = hostBits >= 128 ? UInt128.max : (UInt128(1) << hostBits) - 1
-                return (start, start + span)
+                guard let within else { return (start, start + span) }
+                let clipped = (max(start, within.0), min(start + span, within.1))
+                return clipped.0 <= clipped.1 ? clipped : nil
             }.sorted { $0.0 < $1.0 }
         }
         // Merge the included ranges, then cut every excluded range out of them.
@@ -85,7 +113,8 @@ public struct OpenConnectNetworkPlan: Equatable, Sendable {
             merged = next
         }
         let total = merged.reduce(0.0) { $0 + Double($1.1 - $1.0) + 1 }
-        return total / pow(2.0, Double(bits))
+        let space = within.map { Double($0.1 - $0.0) + 1 } ?? pow(2.0, Double(bits))
+        return min(1, total / space)
     }
 
     /// Placeholders for leak blocking, the same as the WireGuard engine's (RFC 7600 dummy IPv4,
@@ -145,16 +174,18 @@ public struct OpenConnectNetworkPlan: Equatable, Sendable {
         }
         // One family full and the other not (no address, or only partial routes): the other
         // goes into the tunnel too, as the WireGuard engine does (CLAUDE.md #10, S5B-M2).
-        let full4 = plan.isFullTunnelIPv4, full6 = plan.isFullTunnelIPv6
-        if full4 && !full6 {
+        let blocks6 = plan.blocksUncoveredIPv6, blocks4 = plan.blocksUncoveredIPv4
+        if blocks6 {
             if plan.ipv6Address == nil {
                 plan.blockedIPv6 = true
                 plan.ipv6Address = Route(address: placeholderIPv6, mask: "128", prefixLength: 128)
             }
+            // All of IPv6 goes in; the gateway's IPv6 excludes go too, on purpose: they would
+            // leave exactly the uncovered IPv6 this blocks outside (fails closed).
             plan.ipv6Included = [Route(address: "::", mask: "0", prefixLength: 0)]
             plan.ipv6Excluded = []
         }
-        if full6 && !full4 {
+        if blocks4 {
             if plan.ipv4Address == nil {
                 plan.blockedIPv4 = true
                 plan.ipv4Address = Route(address: placeholderIPv4, mask: "255.255.255.255", prefixLength: 32)
@@ -186,12 +217,23 @@ public struct OpenConnectNetworkPlan: Equatable, Sendable {
             }
         }
         let domains = (info.domain ?? "").split(whereSeparator: { $0 == " " || $0 == "," }).map(String.init)
-        plan.searchDomains = Array(domains.compactMap(validDomain).prefix(maxDomains))
+        let validDomains = domains.compactMap(validDomain)
+        plan.searchDomains = Array(validDomains.prefix(maxDomains))
         let split = info.splitDNS.flatMap { $0.split(whereSeparator: { $0 == " " || $0 == "," }).map(String.init) }.compactMap(validDomain)
         // Split DNS only means something for a split tunnel: a full tunnel's DNS answers all.
         if !split.isEmpty && !plan.isFullTunnelIPv4 && !plan.isFullTunnelIPv6 {
             plan.matchDomains = Array(split.prefix(maxDomains))
+            if split.count > maxDomains || info.splitDNSTruncated {
+                plan.dropped.append("split-DNS domains beyond \(maxDomains) (looked up outside the tunnel)")
+            }
         }
+        if validDomains.count > maxDomains { plan.dropped.append("search domains beyond \(maxDomains)") }
+        // Extra includes would have carried traffic into the tunnel; extra excludes would have
+        // kept it out, so dropping those only sends more through the tunnel.
+        if info.routesTruncated || info.splitIncludes.count > maxRoutes {
+            plan.dropped.append("routes beyond \(maxRoutes) (that traffic goes outside the tunnel unless the kill switch is on)")
+        }
+        if info.splitExcludes.count > maxRoutes { plan.dropped.append("excluded routes beyond \(maxRoutes) (that traffic goes through the tunnel)") }
         if info.mtu > 0 { plan.mtu = min(max(info.mtu, 576), 9000) }
         return plan
     }

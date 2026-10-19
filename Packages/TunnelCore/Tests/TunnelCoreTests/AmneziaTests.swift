@@ -384,6 +384,16 @@ private func errors4(_ lines: String) -> [String] {
         #expect(!cov("0.0.0.0/1", "128.0.0.0/1", "::/1", "8000::/1").blocksUncoveredIPv6)
         #expect(cov("2000::/3").blocksUncoveredIPv4)
         #expect(!cov("10.0.0.0/8").blocksUncoveredIPv6)
+        // Both measures pass, but NAT64 (64:ff9b::/96, inside ::/1) is neither routed nor
+        // blocked: blocked now (review NEW-10). Routing it too is enough.
+        #expect(cov("0.0.0.0/0", "2000::/3", "8000::/1").blocksUncoveredIPv6)
+        #expect(!cov("0.0.0.0/0", "2000::/3", "8000::/1", "64:ff9b::/96").blocksUncoveredIPv6)
+    }
+
+    /// Gateway text in the Log tab and the terminal stays on one line (review NEW-8).
+    @Test func logLinesAreOneLine() {
+        #expect(TunnelName.line("ok\rFAKE\u{2028}x\u{1B}[31m\u{202E}y") == "ok FAKE x [31m y")
+        #expect(TunnelName.line("  keeps  spacing ") == "  keeps  spacing ")
     }
 
     /// Internet IPv6 is 2000::/3: 8000::/1 routes none of it, 2000::/3 all of it (SEC-5).

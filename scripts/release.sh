@@ -124,6 +124,16 @@ if [[ $dry_run -eq 0 ]]; then
     [[ -n "$build_commit" ]] || { echo "no commit to release from -- commit first" >&2; exit 1; }
     changes=$(git status --porcelain)
     [[ -z "$changes" ]] || { echo "uncommitted or untracked changes -- commit them so the release matches its commit:" >&2; echo "$changes" >&2; exit 1; }
+    # `git status` never lists ignored files, but XcodeGen bundles those too: a local
+    # work.anyconnect, client.p12 or CLAUDE.md in a source folder would ship (review NEW-5).
+    # build-signed.sh also checks the finished bundle against a list of expected files.
+    ignored=$(git ls-files --others --ignored --exclude-standard -- \
+        App Shared Resources completions Tunnel ExtensionShared OpenConnect CLI Vendor/WireGuardKit/Sources Packages/TunnelCore/Sources)
+    stray=""
+    while IFS= read -r f; do
+        [[ -z "$f" || "$(basename "$f")" == .DS_Store ]] || stray+="$f"$'\n'
+    done <<< "$ignored"
+    [[ -z "$stray" ]] || { echo "ignored files in source folders would ship in the app -- move them out:" >&2; printf '%s' "$stray" >&2; exit 1; }
     origin_url=$(git remote get-url origin 2>/dev/null || true)
     if [[ "$origin_url" == *github.com* ]]; then
         gh auth status >/dev/null 2>&1 || { echo "gh is not logged in -- run: gh auth login" >&2; exit 1; }

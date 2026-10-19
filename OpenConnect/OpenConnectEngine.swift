@@ -152,10 +152,10 @@ final class OpenConnectEngine: @unchecked Sendable {
         guard let vpn else { throw Failure(errorDescription: "The tunnel isn't connected") }
         // libopenconnect gets its own descriptor for NetworkExtension's utun socket, and the
         // engine closes exactly that one; NetworkExtension's stays NetworkExtension's (S5B-L4).
-        let ownFD = dup(tunnelFD)
+        // The copy is a utun socket too: claimed as it is made, so another tunnel's lookup skips
+        // it (S5C, review NEW-10).
+        let ownFD = TunnelDevice.duplicateAndClaim(tunnelFD)
         guard ownFD >= 0 else { throw Failure(errorDescription: "Could not use the tunnel device") }
-        // The copy is a utun socket too: claimed, so another tunnel's lookup skips it (S5C).
-        TunnelDevice.claimExisting(ownFD)
         guard openconnect_setup_tun_fd(vpn, ownFD) == 0 else {
             TunnelDevice.closeAndRelease(ownFD)
             throw Failure(errorDescription: "libopenconnect could not use the tunnel device")
@@ -287,14 +287,16 @@ final class OpenConnectEngine: @unchecked Sendable {
         var info: UnsafePointer<oc_ip_info>?
         guard openconnect_get_ip_info(vpn, &info, nil, nil) == 0, let i = info?.pointee else { return out }
         func s(_ p: UnsafePointer<CChar>?) -> String? { p.map { String(cString: $0) } }
-        func list(_ head: UnsafeMutablePointer<oc_split_include>?) -> [String] {
+        /// The first `maxRoutes` entries, and whether more were left (reported, not silently
+        /// lost; review NEW-10).
+        func list(_ head: UnsafeMutablePointer<oc_split_include>?) -> (items: [String], truncated: Bool) {
             var items: [String] = []
             var node = head
             while let n = node, items.count < OpenConnectNetworkPlan.maxRoutes {
                 if let r = n.pointee.route { items.append(String(cString: r)) }
                 node = n.pointee.next
             }
-            return items
+            return (items, node != nil)
         }
         out.address = s(i.addr)
         out.netmask = s(i.netmask)
@@ -302,9 +304,12 @@ final class OpenConnectEngine: @unchecked Sendable {
         out.netmask6 = s(i.netmask6)
         out.dns = [i.dns.0, i.dns.1, i.dns.2].compactMap(s)
         out.domain = s(i.domain)
-        out.splitDNS = list(i.split_dns)
-        out.splitIncludes = list(i.split_includes)
-        out.splitExcludes = list(i.split_excludes)
+        let dns = list(i.split_dns), includes = list(i.split_includes), excludes = list(i.split_excludes)
+        out.splitDNS = dns.items
+        out.splitIncludes = includes.items
+        out.splitExcludes = excludes.items
+        out.splitDNSTruncated = dns.truncated
+        out.routesTruncated = includes.truncated  // dropped excludes only send more into the tunnel
         out.mtu = Int(i.mtu)
         return out
     }

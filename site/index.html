@@ -340,8 +340,7 @@
     </div>
 
     <p class="meta">
-      or <code>brew trust --cask ventz/tap/wombat-wireguard</code>, then
-      <code>brew install --cask ventz/tap/wombat-wireguard</code>
+      or <code>brew install --cask ventz/tap/wombat-wireguard</code>
     </p>
     <p class="meta" id="release">
       macOS 15+ &middot; universal (Apple silicon &amp; Intel) &middot; signed and notarized &middot; MIT licensed
@@ -398,7 +397,7 @@
     </li>
     <li>
       <h3>Safe on shared Macs</h3>
-      <span>Each macOS user sees and starts only their own tunnels, even though VPN settings are system-wide. An on-demand tunnel that comes up at the login window stops when another account signs in.</span>
+      <span>Each macOS user sees and starts only their own tunnels, even though VPN settings are system-wide. An on-demand tunnel that comes up at the login window stops when another account takes the screen (a sign-in over SSH doesn't stop it).</span>
     </li>
     <li>
       <h3>A current engine</h3>
@@ -501,7 +500,7 @@ peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
     </li>
     <li>
       <h3>Homebrew</h3>
-      <span><code>brew install --cask ventz/tap/wombat-wireguard</code> installs the app and puts <code>wombat</code> on your PATH, no sudo needed. Homebrew 7 and later first ask you to trust the tap: <code>brew trust --cask ventz/tap/wombat-wireguard</code>.</span>
+      <span><code>brew install --cask ventz/tap/wombat-wireguard</code> installs the app and puts <code>wombat</code> on your PATH, no sudo needed. Installing by the full name trusts just this cask, as Homebrew 6 and later require.</span>
     </li>
   </ul>
 

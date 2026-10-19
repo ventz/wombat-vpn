@@ -45,9 +45,9 @@ enum QRReader {
     static func configurations(in payloads: [String]) -> [String] {
         var seen = Set<String>()
         return payloads.filter {
-            $0.utf8.count <= WgQuick.maxBytes
-                && $0.range(of: "[Interface]", options: .caseInsensitive) != nil
-                && seen.insert($0).inserted
+            // The first section must be [Interface]: a substring test let through a code holding
+            // an AnyConnect profile with "[Interface]" in a comment or value (review NEW-10).
+            $0.utf8.count <= WgQuick.maxBytes && WgQuick.startsWithInterface($0) && seen.insert($0).inserted
         }
     }
 

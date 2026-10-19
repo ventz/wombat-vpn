@@ -203,6 +203,7 @@ enum Client {
 /// The default covers the app's 120 s approval window: down, up, ondemand, killswitch, rename,
 /// import and delete can all wait for the user. Read-only requests answer at once anyway.
 func call(_ request: Control.Request, timeout: Int = 135) throws -> Control.Response {
+    try requireCurrentApp(before: request)
     let response = try Client.send(request, timeout: timeout)
     guard response.ok else {
         printErr("wombat: \(response.error.map(safe) ?? "request failed")")
@@ -210,6 +211,22 @@ func call(_ request: Control.Request, timeout: Int = 135) throws -> Control.Resp
     }
     return response
 }
+
+/// Refuses to drive a Wombat app older than this CLI. The socket check proves the app is ours,
+/// not which version: an older notarized Wombat started by any same-user process would take the
+/// socket, and its approvals lack later fixes (review NEW-10). `wombat doctor` reports it too.
+func requireCurrentApp(before request: Control.Request) throws {
+    guard request.command != .version, !appVersionChecked else { return }
+    let mine = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+    let app = try Client.send(Control.Request(.version), timeout: 15).version ?? ""
+    if AppVersion.isOlder(app, than: mine) {
+        printErr("wombat: the Wombat app (\(safe(app))) is older than this command (\(mine)); update the app, or use the wombat inside it")
+        exit(Exit.failure.rawValue)
+    }
+    appVersionChecked = true
+}
+
+nonisolated(unsafe) var appVersionChecked = false
 
 func requireName(_ args: Args, _ index: Int = 0, _ what: String = "tunnel name") throws -> String {
     guard args.positional.count > index else { throw Usage(message: "missing \(what)") }
@@ -429,7 +446,8 @@ func cmdKillSwitch(_ args: Args) throws {
 
 func cmdLog(_ args: Args) throws {
     let r = try call(Control.Request(.log, name: try requireName(args)))
-    for line in r.log ?? [] { print(line) }
+    // Cleaned again here: a log line can hold gateway text, and a terminal acts on escapes.
+    for line in r.log ?? [] { print(TunnelName.line(line)) }
 }
 
 // MARK: Offline

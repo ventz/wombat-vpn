@@ -81,8 +81,9 @@ final class SignInCoordinator: ObservableObject {
         show()
         // A CLI `wombat up` starts a sign-in while another app is in front: say so (A5-L7).
         say("Wombat: sign in to \(name)", .high)
-        // STRAP keys let the gateway offer the default browser; only when the profile allows it.
-        let strap = profile.ssoInBrowser ? AnyConnectStrap() : nil
+        // STRAP keys let the gateway offer the default browser; only when the profile allows it
+        // and pins no certificate, which a browser can't check (review NEW-1).
+        let strap = profile.usesBrowserSignIn ? AnyConnectStrap() : nil
         var browser: (@Sendable (SSORequest) async throws -> Data)?
         if strap != nil {
             browser = { request in try await SignInCoordinator.shared.runBrowser(request, accepts: { (try? strap?.decryptToken($0)) != nil }) }
@@ -224,7 +225,16 @@ final class SignInCoordinator: ObservableObject {
 
     /// The gateway's certificate isn't trusted by macOS. Pinning it is a security decision, so
     /// the fingerprint is shown and Cancel is the default.
-    private var trustDeclinedUntil = Date.distantPast
+    /// Persisted like the CLI approvals' cool-down, so `wombat stop` (quitting the app) doesn't
+    /// reset it (review NEW-10).
+    private var trustDeclinedUntil: Date {
+        get {
+            let saved = Date(timeIntervalSince1970: UserDefaults.standard.double(forKey: "trustDeclinedUntil"))
+            // A clock set back must not leave a long lockout.
+            return saved.timeIntervalSinceNow > 10 ? .distantPast : saved
+        }
+        set { UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: "trustDeclinedUntil") }
+    }
     private var trustAccepted = false
 
     func confirmTrust(host: String, sha256: String, reason: String) -> Bool {
@@ -599,8 +609,27 @@ struct SSOWebView: NSViewRepresentable {
 enum SSODataStore {
     @MainActor static func store(for id: UUID) -> WKWebsiteDataStore { WKWebsiteDataStore(forIdentifier: id) }
 
-    /// Deletes a VPN's sign-in cookies (on delete, or when the user asks).
-    @MainActor static func remove(_ id: UUID) async {
-        try? await WKWebsiteDataStore.remove(forIdentifier: id)
+    /// Deletes a VPN's sign-in cookies (on delete, or when the user asks) and reports whether
+    /// that worked. WebKit refuses to remove a store a web view still uses, so this VPN's
+    /// sign-in is canceled first, and the removal tried again once (review NEW-10).
+    @MainActor static func remove(_ id: UUID) async -> Bool {
+        let coordinator = SignInCoordinator.shared
+        if coordinator.activeTunnelID == id {
+            coordinator.cancel()
+            var waited = 0
+            while coordinator.activeTunnelID == id, waited < 20 {
+                try? await Task.sleep(for: .milliseconds(100))
+                waited += 1
+            }
+        }
+        for attempt in 0..<2 {
+            do {
+                try await WKWebsiteDataStore.remove(forIdentifier: id)
+                return true
+            } catch {
+                if attempt == 0 { try? await Task.sleep(for: .milliseconds(500)) }
+            }
+        }
+        return false
     }
 }

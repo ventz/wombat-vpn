@@ -42,8 +42,12 @@ If Xcode can't create the Developer ID provisioning profiles itself (its account
 with the Admin or App Manager role (a notarization-only Developer key gets 403):
 
 ```bash
-ASC_KEY_ID=<key id> ASC_ISSUER_ID=<issuer id> uv run scripts/provision-profiles.py
+ASC_KEY_ID=<key id> ASC_ISSUER_ID=<issuer id> uv run --locked scripts/provision-profiles.py
 ```
+
+The process holds that key, so every dependency, transitive ones included, is pinned in
+`scripts/provision-profiles.py.lock` (`uv lock --script`, nothing newer than two weeks), and
+`--locked` refuses to run when the lock and the script disagree.
 
 Forks: the team appears in `project.yml` (`DEVELOPMENT_TEAM`), `scripts/ExportOptions.plist`
 (`teamID`) and the signing identity (`WOMBAT_SIGNING_IDENTITY`); the code reads the team from
@@ -52,7 +56,9 @@ its own signature. A fork that ships its own builds must also replace `SUFeedURL
 copies check Wombat's feed.
 
 **Bump the build number for every signed build you install** (`CURRENT_PROJECT_VERSION` in
-`project.yml`): the app only replaces an installed extension whose build number differs.
+`project.yml`): the app only replaces an installed extension with a higher build number. To go
+back to an older build, remove the extension first (System Settings › General › Login Items &
+Extensions), or the older app keeps running against the newer extension.
 
 A Debug build, for UI work:
 

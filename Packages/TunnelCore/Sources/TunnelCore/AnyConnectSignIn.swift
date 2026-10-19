@@ -133,6 +133,7 @@ public enum AnyConnectSignInError: LocalizedError, Equatable {
     case server(String)
     case hostScanRequired
     case externalBrowserRequired
+    case externalBrowserRequiredWithPin
     case multipleCertificatesRequired
     case clientCertificateRejected
     case clientCertificateRequired
@@ -158,6 +159,9 @@ public enum AnyConnectSignInError: LocalizedError, Equatable {
             // Only thrown when this VPN's profile turned browser sign-in off (SingleSignOn =
             // window); otherwise Wombat uses the default browser (quality-6 M2).
             return "This gateway only allows single sign-on in your default browser, which is turned off for this VPN. Turn on “Single sign-on in my default browser” under Edit VPN › Advanced, then connect again."
+        case .externalBrowserRequiredWithPin:
+            // Browser sign-in is never offered with a pin: the browser can't check it (NEW-1).
+            return "This gateway only allows single sign-on in your default browser, but this VPN pins the gateway's certificate, and a browser can't check a pin. Ask your IT department for a certificate macOS trusts, or for sign-in without the external browser."
         case .multipleCertificatesRequired:
             return "This gateway needs two certificates (machine and user), which Wombat doesn't support yet."
         case .clientCertificateRejected:
@@ -194,7 +198,8 @@ public struct AnyConnectSignIn: Sendable {
         self.transport = transport
         self.prompts = prompts
         self.hasClientCertificate = hasClientCertificate
-        self.strap = strap.flatMap { prompts.externalBrowser == nil ? nil : $0 }
+        // Never advertise the external browser with a pinned certificate (review NEW-1).
+        self.strap = strap.flatMap { prompts.externalBrowser == nil || profile.serverCertificate != nil ? nil : $0 }
     }
 
     static let maxSteps = 24
@@ -287,6 +292,7 @@ public struct AnyConnectSignIn: Sendable {
             // SAML/SSO: a browser produces the token for the form's sso field.
             if let sso = reply.sso, form.fields.contains(where: { $0.kind == .ssoToken }) {
                 let external = sso.browserMode?.lowercased() == "external"
+                if external && profile.serverCertificate != nil { throw AnyConnectSignInError.externalBrowserRequiredWithPin }
                 if external && (strap == nil || prompts.externalBrowser == nil) { throw AnyConnectSignInError.externalBrowserRequired }
                 // The flow must end on the gateway itself (ASA and FTD always do): the page that
                 // ends it decides whose cookies count as the token, and a hostile gateway could

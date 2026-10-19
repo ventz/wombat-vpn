@@ -490,9 +490,11 @@ final class TunnelStore: ObservableObject {
         let manager = NETunnelProviderManager()
         manager.localizedDescription = name
         manager.protocolConfiguration = proto
-        // Only one of our configurations is enabled at a time; enabling a new one would silently
-        // switch off the on-demand rules of the current one. connect() enables it when used.
-        manager.isEnabled = tunnels.isEmpty
+        // Saved disabled, always: macOS enables one VPN configuration of this kind at a time, so
+        // enabling a new one would silently switch off the current one, ours or another app's
+        // (with its on-demand rules and kill switch), and another account's first import used
+        // to do exactly that (reviews SEC-7, NEW-4). connect() and on-demand enable it when used.
+        manager.isEnabled = false
         let engine: ExtensionSecrets.Engine = proto.providerBundleIdentifier == AppIdentity.openConnectExtensionBundleID ? .openConnect : .wireGuard
         do {
             try await manager.saveToPreferences()
@@ -511,6 +513,7 @@ final class TunnelStore: ObservableObject {
     func update(_ tunnel: Tunnel, name: String? = nil, text requested: String) async throws {
         var text = requested
         let server: String
+        var becomesFull = false
         if tunnel.isOpenConnect {
             let parsed = OpenConnectFile.parse(text)
             guard let profile = parsed.profile else {
@@ -524,6 +527,9 @@ final class TunnelStore: ObservableObject {
                 throw StoreError.invalid(parsed.errors.map(\.description).joined(separator: "\n"))
             }
             server = Self.serverAddress(config)
+            // A split tunnel edited into a full one gets the same kill-switch default as a full
+            // tunnel imported new (review NEW-10). One that was already full keeps its setting.
+            becomesFull = config.isFullTunnel && tunnel.configuration?.isFullTunnel == false
         }
         try await tunnel.manager.loadFromPreferences()
         guard let proto = tunnel.proto else { throw StoreError.invalid("Tunnel has no protocol configuration") }
@@ -531,6 +537,7 @@ final class TunnelStore: ObservableObject {
         let oldReference = proto.passwordReference
         let oldName = tunnel.manager.localizedDescription
         let oldServer = proto.serverAddress
+        let oldIncludeAll = proto.includeAllNetworks, oldExcludeLocal = proto.excludeLocalNetworks
         let oldProviderConfiguration = proto.providerConfiguration
         let oldRevision = oldProviderConfiguration?[ProviderConfigKey.revision] as? String ?? ""
         let revision = UUID().uuidString
@@ -552,12 +559,18 @@ final class TunnelStore: ObservableObject {
             var providerConfiguration = proto.providerConfiguration ?? [:]
             providerConfiguration[ProviderConfigKey.revision] = revision
             proto.providerConfiguration = providerConfiguration
+            if becomesFull && !proto.includeAllNetworks {
+                proto.includeAllNetworks = true
+                proto.excludeLocalNetworks = false
+            }
             tunnel.manager.localizedDescription = newName
             try await tunnel.manager.saveToPreferences()
         } catch {
             // Roll everything back: in-memory manager, keychain, extension copy.
             proto.passwordReference = oldReference
             proto.serverAddress = oldServer
+            proto.includeAllNetworks = oldIncludeAll
+            proto.excludeLocalNetworks = oldExcludeLocal
             proto.providerConfiguration = oldProviderConfiguration
             tunnel.manager.localizedDescription = oldName
             ConfigKeychain.delete(reference)
@@ -580,7 +593,8 @@ final class TunnelStore: ObservableObject {
         try await tunnel.manager.removeFromPreferences()
         if let reference { ConfigKeychain.delete(reference) }
         pendingHandOff.remove(tunnel.id)
-        if tunnel.isOpenConnect { await SSODataStore.remove(tunnel.id) }  // its sign-in cookies
+        // Its sign-in cookies. A failure is reported after the rest is cleaned up (review NEW-10).
+        let cookiesRemoved = tunnel.isOpenConnect ? await SSODataStore.remove(tunnel.id) : true
         do {
             try await ExtensionSecrets.remove(tunnel.engine, id: tunnel.id)
         } catch {
@@ -589,6 +603,9 @@ final class TunnelStore: ObservableObject {
             log.error("Extension copy of \(tunnel.name, privacy: .public) not removed yet: \(error.localizedDescription, privacy: .public)")
         }
         await reload()
+        if !cookiesRemoved {
+            throw StoreError.invalid("“\(tunnel.name)” was deleted, but its single sign-on cookies couldn't be removed. Sign out at your identity provider to end that session.")
+        }
     }
 
     /// A copy under a new name (same keys): handy for variants such as split vs full tunnel.
@@ -655,6 +672,15 @@ final class TunnelStore: ObservableObject {
         // Look the endpoints up first: once another tunnel's kill switch is being torn down, or
         // this one's starts, the system resolver may be blocked (audit Q2-M2).
         let endpoints = await resolvedEndpoints(tunnel)
+        // What the CLI user approved was decided before the lookup: a tunnel that gained
+        // on-demand or an active kill switch meanwhile isn't switched off unasked, as for
+        // AnyConnect after its sign-in (review NEW-10).
+        if let approved {
+            let affected = tunnels.filter { $0 !== tunnel && ($0.hasOnDemandSetting || $0.isKillSwitchActive) }
+            if !Set(affected.map(\.id)).isSubset(of: approved) {
+                throw StoreError.invalid("Another tunnel with on-demand or the kill switch came up meanwhile; run the command again to approve switching")
+            }
+        }
         // One of our tunnels at a time. Another tunnel with on-demand on would be restarted by
         // macOS right away, so switching tunnels also turns its on-demand off.
         for other in tunnels where other !== tunnel {

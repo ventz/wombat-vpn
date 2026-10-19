@@ -17,8 +17,7 @@ starts in the background if needed); key and lint commands work offline.
 
 ## Install
 
-Installing with Homebrew (`brew trust --cask ventz/tap/wombat-wireguard`, then
-`brew install --cask ventz/tap/wombat-wireguard`) links it for you.
+Installing with Homebrew (`brew install --cask ventz/tap/wombat-wireguard`) links it for you.
 Otherwise the binary ships inside the app; link it onto your `PATH`. Settings › Command Line
 shows the exact command, with a Copy button, and turns green once the link is in place:
 
@@ -92,6 +91,11 @@ anything that adds a tunnel or weakens protection asks you in the app first:
   (traffic would then leave without the VPN)
 - `up`, or `ondemand … on`, when another tunnel has on-demand or an active kill switch (Wombat
   runs one tunnel at a time, so that tunnel is switched off)
+- `up`, or `ondemand … on`, when none of your Wombat tunnels is the enabled VPN configuration:
+  macOS enables one at a time, so another VPN app's configuration (with its on-demand rules and
+  kill switch) may be switched off. Wombat can't see other apps' configurations, so it asks
+  whenever that's possible. New tunnels are saved disabled for the same reason, and are enabled
+  when first connected
 - turning on-demand off, connecting on fewer interfaces, trusting a Wi-Fi network (even while
   on-demand is off)
 - allowing the local network through the kill switch
@@ -99,8 +103,10 @@ anything that adds a tunnel or weakens protection asks you in the app first:
 
 The command waits while the dialog is open (up to two minutes) and never sends a request twice.
 "Cancel" is the default button, and after you decline (or cancel Touch ID), new prompts and
-Touch ID requests are refused for 10 seconds, also across an app restart, so a script can't keep
-asking. macOS's own controls (System Settings, `scutil --nc stop`) can still stop a tunnel. Before sending anything, `wombat` checks that the socket belongs to the
+Touch ID requests are refused for 10 seconds, doubling with each decline in a row (up to about
+five minutes), also across an app restart, so a script can't keep asking. An unanswered Touch ID
+request is canceled after two minutes, like a dialog. If the Wombat app is older than the
+`wombat` command, the command refuses to talk to it. macOS's own controls (System Settings, `scutil --nc stop`) can still stop a tunnel. Before sending anything, `wombat` checks that the socket belongs to the
 signed Wombat app, since an import carries a private key.
 
 ## JSON output

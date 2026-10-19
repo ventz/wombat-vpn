@@ -124,6 +124,11 @@ struct AnyConnectEditor: View {
                     Toggle("Use DTLS (faster; turn off if UDP is blocked)", isOn: $dtls)
                     Toggle("Single sign-on in my default browser when the gateway allows it", isOn: $ssoInBrowser)
                         .help("Passkeys, password managers and your identity provider's session work there. Off: always Wombat's sign-in window.")
+                        .disabled(!pin.trimmingCharacters(in: .whitespaces).isEmpty)
+                    if !pin.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Text("With a pinned certificate, sign-in always uses Wombat's window: a browser can't check the pin.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             .formStyle(.grouped)
