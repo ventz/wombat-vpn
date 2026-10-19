@@ -155,7 +155,10 @@ became the enabled one: `status` then shows "on-demand (paused)".
 ## Shell completion
 
 Completion covers commands, flags, `on`/`off` style arguments, files, and your tunnel names. The
-names come from the running app (`wombat` asks it, and never starts it just to complete a name).
+names come from the app when it's running, and otherwise from macOS's VPN settings, so they
+complete with the app closed too (`wombat` never starts the app just to complete a name). Each
+name shows its state in zsh and fish. `up` offers the tunnels that aren't connected and `down`
+the connected ones (all of them when none match); other commands offer every tunnel.
 The scripts are in [`completions/`](../completions) and ship inside the app, in
 `Wombat.app/Contents/Resources/completions`.
 

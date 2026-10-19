@@ -626,6 +626,27 @@ func cmdDoctor() {
     }
 }
 
+/// Tunnel names for shell completion, one sanitized name per line; never launches the app
+/// (Q2-L1). `--state` adds a tab and the state. After a command, only the tunnels it applies
+/// to: `up`/`connect` the ones not connected, `down`/`disconnect` the connected ones (all, when
+/// none match). From the app when it's running (2 s cap), else from macOS (SystemTunnels.swift).
+func cmdNames(_ args: Args) {
+    var tunnels: [(name: String, status: String)]
+    if let r = try? Client.send(Control.Request(.list), timeout: 2, launch: false) {
+        tunnels = (r.tunnels ?? []).map { ($0.name, $0.status) }
+    } else {
+        tunnels = SystemTunnels.list().map { ($0.name, $0.status) }
+    }
+    let live: Set = ["connected", "connecting", "reasserting"]
+    let wanted: ((String) -> Bool)? = switch args.positional.first {
+    case "up", "connect": { !live.contains($0) }
+    case "down", "disconnect": { live.contains($0) }
+    default: nil
+    }
+    if let wanted, tunnels.contains(where: { wanted($0.status) }) { tunnels = tunnels.filter { wanted($0.status) } }
+    for t in tunnels { print(args.has("--state") ? "\(safe(t.name))\t\(safe(t.status))" : safe(t.name)) }
+}
+
 /// Prints a completion script, or sets them up (CompletionSetup.swift). The scripts live in
 /// completions/ in the repository and ship in the app at Contents/Resources/completions, where
 /// the Homebrew cask and `completion install` link them from. Tunnel names come from `wombat _names`.
@@ -707,11 +728,7 @@ do {
     case "completion": try cmdCompletion(args)
     case "install-skill", "install-skills": try cmdInstallSkill(args)
     case "start": try Client.startApp(); print("Wombat started.")
-    case "_names":
-        // For shell completion: one sanitized name per line, and never launches the app (Q2-L1).
-        if let r = try? Client.send(Control.Request(.list), timeout: 2, launch: false) {
-            for t in r.tunnels ?? [] { print(safe(t.name)) }
-        }
+    case "_names": cmdNames(args)
     case "stop", "quit": cmdStop()
     case "version", "--version", "-v":
         print("wombat \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")")
