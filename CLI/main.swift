@@ -438,7 +438,7 @@ func cmdKillSwitch(_ args: Args) throws {
     var request = Control.Request(.protection, name: name)
     // Same default as the app for full tunnels: the local network stays blocked unless asked
     // for (TunnelVision / LocalNet; audit Q2-M3). --block-lan is still accepted.
-    request.protection = Control.Protection(killSwitch: state == "on", allowLAN: state == "on" && args.has("--allow-lan"))
+    request.protection = Control.Protection(killSwitch: state == "on", allowLAN: args.has("--allow-lan"))
     if state == "off" { printErr("Confirm with Touch ID or your password in Wombat…") }
     else if args.has("--allow-lan") { printErr("Waiting for Wombat (approve there if it asks)…") }
     let r = try call(request)

@@ -234,6 +234,9 @@ public enum OpenConnectFile {
         var normalized = components
         normalized.scheme = "https"
         normalized.host = host.lowercased()
+        // A group URL with a trailing slash isn't the group on an ASA (it redirects to the web
+        // portal), so "vpn.example.edu/staff/" means "/staff".
+        while normalized.path.count > 1, normalized.path.hasSuffix("/") { normalized.path.removeLast() }
         if normalized.path.isEmpty { normalized.path = "/" }
         guard let url = normalized.url else { return .failure(Problem(message: "Server is not a valid address")) }
         return .success(url)

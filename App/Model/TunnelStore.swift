@@ -66,6 +66,12 @@ final class Tunnel: ObservableObject, Identifiable {
     var hasOnDemandSetting: Bool { manager.isOnDemandEnabled }
     /// On-demand is switched on here, but another VPN configuration took over (SEC-7).
     var isOnDemandPaused: Bool { manager.isOnDemandEnabled && !manager.isEnabled }
+    /// Whether "Allow local network" can take effect without the kill switch. macOS honors
+    /// `excludeLocalNetworks` only with `includeAllNetworks` or `enforceRoutes`, and
+    /// `enforceRoutes` doesn't apply to default routes (Apple, developer forums thread 832079),
+    /// so only a WireGuard split tunnel, whose routes the app knows, qualifies. A full tunnel or
+    /// a gateway's routes leave local subnets to the routing table's more specific routes.
+    var canAllowLANWithoutKillSwitch: Bool { !isOpenConnect && configuration.map { !$0.isFullTunnel } == true }
     /// The kill switch is holding traffic in the tunnel right now.
     var isKillSwitchActive: Bool { isActive && proto?.includeAllNetworks == true }
     var connectedSince: Date? {
@@ -537,7 +543,7 @@ final class TunnelStore: ObservableObject {
         let oldReference = proto.passwordReference
         let oldName = tunnel.manager.localizedDescription
         let oldServer = proto.serverAddress
-        let oldIncludeAll = proto.includeAllNetworks, oldExcludeLocal = proto.excludeLocalNetworks
+        let oldIncludeAll = proto.includeAllNetworks, oldExcludeLocal = proto.excludeLocalNetworks, oldEnforceRoutes = proto.enforceRoutes
         let oldProviderConfiguration = proto.providerConfiguration
         let oldRevision = oldProviderConfiguration?[ProviderConfigKey.revision] as? String ?? ""
         let revision = UUID().uuidString
@@ -562,6 +568,7 @@ final class TunnelStore: ObservableObject {
             if becomesFull && !proto.includeAllNetworks {
                 proto.includeAllNetworks = true
                 proto.excludeLocalNetworks = false
+                proto.enforceRoutes = false
             }
             tunnel.manager.localizedDescription = newName
             try await tunnel.manager.saveToPreferences()
@@ -571,6 +578,7 @@ final class TunnelStore: ObservableObject {
             proto.serverAddress = oldServer
             proto.includeAllNetworks = oldIncludeAll
             proto.excludeLocalNetworks = oldExcludeLocal
+            proto.enforceRoutes = oldEnforceRoutes
             proto.providerConfiguration = oldProviderConfiguration
             tunnel.manager.localizedDescription = oldName
             ConfigKeychain.delete(reference)
@@ -920,11 +928,14 @@ final class TunnelStore: ObservableObject {
     }
 
     /// Kill switch: route everything through the tunnel and block traffic while it's down.
+    /// Without it, allowing the local network needs `enforceRoutes` (see
+    /// `canAllowLANWithoutKillSwitch`), and only then: other tunnels keep the plain routing table.
     func setProtection(_ tunnel: Tunnel, _ protection: Control.Protection) async throws {
         try await tunnel.manager.loadFromPreferences()
         guard let proto = tunnel.proto else { return }
         proto.includeAllNetworks = protection.killSwitch
         proto.excludeLocalNetworks = protection.allowLAN
+        proto.enforceRoutes = !protection.killSwitch && protection.allowLAN && tunnel.canAllowLANWithoutKillSwitch
         try await tunnel.manager.saveToPreferences()
         await reload()
     }

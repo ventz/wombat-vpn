@@ -144,6 +144,17 @@ let testHash = String(repeating: "ab", count: 32)
         #expect(p.displayServer == "vpn.example.edu:8443")
     }
 
+    /// A group URL works typed without https://, and a trailing slash (which an ASA treats as
+    /// the web portal, not the group) is dropped.
+    @Test func groupURLWithoutScheme() throws {
+        let p = try #require(OpenConnectFile.parse("[AnyConnect]\nServer = vpn.example.edu/research").profile)
+        #expect(p.server.absoluteString == "https://vpn.example.edu/research")
+        let slash = try #require(OpenConnectFile.parse("[AnyConnect]\nServer = VPN.example.edu/research//").profile)
+        #expect(slash.server.absoluteString == "https://vpn.example.edu/research")
+        let bare = try #require(OpenConnectFile.parse("[AnyConnect]\nServer = vpn.example.edu/").profile)
+        #expect(bare.server.absoluteString == "https://vpn.example.edu/")
+    }
+
     @Test(arguments: [
         ("Server = http://vpn.example.edu", "never plain http"),
         ("Server = https://user:pw@vpn.example.edu", "user name or password"),
@@ -358,6 +369,84 @@ func prompts(fill: @escaping @Sendable (AnyConnectPrompt) -> [String: String]?,
         _ = try await signIn.run()
         #expect(gateway.requests[1].body.attribute("type") == "init")
         #expect(gateway.requests[1].body.child("group-select")?.allText == "students")
+    }
+
+    /// A gateway that hides its group list ignores a group-select of the alias, so the group is
+    /// tried as the group URL, before single sign-on starts (seen on a university ASA, 2026-10-22).
+    @Test func hiddenGroupListUsesTheGroupURL() async throws {
+        let gateway = ScriptedGateway([xmlReply(ocSSO), xmlReply(ocSSO), xmlReply(ocComplete)])
+        let profile = OpenConnectProfile(server: URL(string: "https://vpn.example.edu/")!, group: "research")
+        let signIn = AnyConnectSignIn(profile: profile, transport: gateway, prompts: prompts(fill: { _ in nil }, sso: { _ in "SAML-TOKEN" }),
+                                      hasClientCertificate: false)
+        _ = try await signIn.run()
+        #expect(gateway.requests.map { $0.body.attribute("type") } == ["init", "init", "auth-reply"])
+        #expect(gateway.requests[0].body.child("group-select")?.allText == "research")
+        #expect(gateway.requests[1].url.absoluteString == "https://vpn.example.edu/research")
+        #expect(gateway.requests[1].body.child("group-access")?.allText == "https://vpn.example.edu/research")
+        #expect(gateway.requests[1].body.child("group-select") == nil)
+        #expect(gateway.requests[2].body.child("auth")?.child("sso-token")?.allText == "SAML-TOKEN")
+
+        // No such group URL: say so instead of signing in to the default group.
+        var missing = GatewayReply(status: 404, body: Data())
+        missing.serverCertificateSHA256 = testHash
+        let bad = AnyConnectSignIn(profile: profile, transport: ScriptedGateway([xmlReply(ocSSO), missing]),
+                                   prompts: prompts(fill: { _ in nil }, sso: { _ in "x" }), hasClientCertificate: false)
+        await #expect(throws: AnyConnectSignInError.unknownGroup("research", choices: [])) { try await bad.run() }
+
+        // A root URL that answers 404 (as on one ASA with OpenConnect's user agent) still
+        // gets the group URL.
+        var rootMissing = GatewayReply(status: 404, body: Data())
+        rootMissing.serverCertificateSHA256 = testHash
+        let rooted = ScriptedGateway([rootMissing, xmlReply(ocSSO), xmlReply(ocComplete)])
+        _ = try await AnyConnectSignIn(profile: profile, transport: rooted, prompts: prompts(fill: { _ in nil }, sso: { _ in "t" }),
+                                       hasClientCertificate: false).run()
+        #expect(rooted.requests.map(\.url.absoluteString) == ["https://vpn.example.edu/", "https://vpn.example.edu/research", "https://vpn.example.edu/research"])
+
+        // Without a group, a 404 with the default user agent suggests "AnyConnect".
+        var notFound = GatewayReply(status: 404, body: Data())
+        notFound.serverCertificateSHA256 = testHash
+        let plain = AnyConnectSignIn(profile: OpenConnectProfile(server: URL(string: "https://vpn.example.edu/")!), transport: ScriptedGateway([notFound]),
+                                     prompts: prompts(fill: { _ in nil }), hasClientCertificate: false)
+        await #expect(throws: AnyConnectSignInError.notFoundForUserAgent) { try await plain.run() }
+        var agent = OpenConnectProfile(server: URL(string: "https://vpn.example.edu/")!)
+        agent.userAgent = "AnyConnect"
+        let named = AnyConnectSignIn(profile: agent, transport: ScriptedGateway([notFound]), prompts: prompts(fill: { _ in nil }), hasClientCertificate: false)
+        await #expect(throws: AnyConnectSignInError.http(404)) { try await named.run() }
+
+        // A server URL that already names a group is left alone.
+        let pathed = OpenConnectProfile(server: URL(string: "https://vpn.example.edu/staff")!, group: "research")
+        let kept = ScriptedGateway([xmlReply(ocSSO), xmlReply(ocComplete)])
+        _ = try await AnyConnectSignIn(profile: pathed, transport: kept, prompts: prompts(fill: { _ in nil }, sso: { _ in "t" }),
+                                       hasClientCertificate: false).run()
+        #expect(kept.requests[1].url.absoluteString == "https://vpn.example.edu/staff")
+    }
+
+    /// A listed group is matched by value or label, ignoring case, and selected before the
+    /// first prompt; a group the list doesn't have is an error naming the choices.
+    @Test func listedGroupIsSelectedFirst() async throws {
+        let gateway = ScriptedGateway([xmlReply(ocPasswordForm), xmlReply(ocPasswordForm), xmlReply(ocComplete)])
+        let seen = Recorder()
+        let profile = OpenConnectProfile(server: URL(string: "https://vpn.example.edu/")!, group: "STUDENTS", username: "jdoe")
+        let signIn = AnyConnectSignIn(profile: profile, transport: gateway, prompts: prompts { p in
+            seen.append(p)
+            return ["username": "jdoe", "password": "x"]
+        }, hasClientCertificate: false)
+        _ = try await signIn.run()
+        #expect(gateway.requests.map { $0.body.attribute("type") } == ["init", "init", "auth-reply"])
+        #expect(gateway.requests[1].body.child("group-select")?.allText == "students")
+        #expect(seen.prompts.count == 1)
+        #expect(seen.prompts.first?.prefilled["group_list"] == "students")
+
+        // Already the selected group (by its group-alias): no restart.
+        let same = ScriptedGateway([xmlReply(ocPasswordForm), xmlReply(ocComplete)])
+        let staff = OpenConnectProfile(server: URL(string: "https://vpn.example.edu/")!, group: "staff")
+        _ = try await AnyConnectSignIn(profile: staff, transport: same, prompts: prompts { _ in ["password": "x"] }, hasClientCertificate: false).run()
+        #expect(same.requests.map { $0.body.attribute("type") } == ["init", "auth-reply"])
+
+        let unknown = OpenConnectProfile(server: URL(string: "https://vpn.example.edu/")!, group: "faculty")
+        let bad = AnyConnectSignIn(profile: unknown, transport: ScriptedGateway([xmlReply(ocPasswordForm)]), prompts: prompts { _ in ["password": "x"] },
+                                   hasClientCertificate: false)
+        await #expect(throws: AnyConnectSignInError.unknownGroup("faculty", choices: ["Staff", "Students"])) { try await bad.run() }
     }
 
     @Test func singleSignOn() async throws {

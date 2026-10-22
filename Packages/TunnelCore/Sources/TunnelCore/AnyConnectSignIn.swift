@@ -148,6 +148,10 @@ public enum AnyConnectSignInError: LocalizedError, Equatable {
     case pinMismatch(host: String, sha256: String)
     /// After your answers were sent, the gateway tried to move the sign-in to another host.
     case crossHostRedirect(String)
+    /// The profile names a group the gateway doesn't have (choices: the ones it lists, if any).
+    case unknownGroup(String, choices: [String])
+    /// HTTP 404 with the default user agent, which some gateways refuse.
+    case notFoundForUserAgent
 
     public var errorDescription: String? {
         switch self {
@@ -172,10 +176,15 @@ public enum AnyConnectSignInError: LocalizedError, Equatable {
         case .tooManySteps: return "The sign-in took too many steps; the gateway may be misconfigured"
         case .insecureRedirect(let to): return "The gateway redirected to \(to), which isn't https; Wombat stopped there"
         case .http(let status): return "The gateway answered HTTP \(status)"
+        case .notFoundForUserAgent:
+            return "The gateway answered HTTP 404 (not found). Some Cisco gateways only answer clients that call themselves AnyConnect: set User agent to “AnyConnect” under Edit VPN › Advanced, then connect again."
         case .noSessionToken: return "The gateway accepted the sign-in but sent no session token"
         case .untrustedServer(let host, _, let reason): return "The certificate of \(host) isn't trusted by macOS: \(reason)"
         case .crossHostRedirect(let host):
             return "After you entered your answers, the gateway tried to continue the sign-in on \(host). Wombat stopped there, so nothing was sent to that host."
+        case .unknownGroup(let group, let choices):
+            let listed = choices.isEmpty ? "" : " It offers: " + choices.joined(separator: ", ") + "."
+            return "The gateway has no group “\(group)”.\(listed) Check the Group in this VPN's settings (group names can be case-sensitive), or leave it empty."
         case .pinMismatch(let host, let sha256):
             return "The certificate of \(host) (SHA-256 \(sha256.prefix(16))…) doesn't match the one pinned for this VPN. If the gateway's certificate changed, check with your IT department before trusting the new one."
         }
@@ -206,9 +215,23 @@ public struct AnyConnectSignIn: Sendable {
     static let maxRedirects = 5
     static let maxGroupChanges = 5
 
+    /// The group URL for a group name: `https://vpn.example.edu/` + `research`. ASA gateways that
+    /// hide their group list ignore a `group-select` of the alias, so the alias's URL is the
+    /// only way to reach that group (seen on a university ASA, 2026-10-22). Nil when the name can't be a
+    /// single path segment.
+    static func groupURL(_ server: URL, group: String) -> URL? {
+        guard !group.isEmpty, group != ".", group != "..", !group.contains("/"),
+              var components = URLComponents(url: server, resolvingAgainstBaseURL: false) else { return nil }
+        components.path = "/" + group
+        components.query = nil
+        return components.url
+    }
+
     public func run() async throws -> AnyConnectSession {
         defer { transport.invalidate() }  // the cookie store and identity don't outlive the sign-in
-        var url = profile.server
+        // The group URL the sign-in starts from: the profile's, or its group's (see groupURL).
+        var base = profile.server
+        var url = base
         // Once the user's answers have been sent, the sign-in stays on that host: a redirect or
         // form action elsewhere would hand the next answers to a host the user didn't see (S5-L1).
         var answered = false
@@ -221,9 +244,11 @@ public struct AnyConnectSignIn: Sendable {
         }
         transport.allowCertificate(for: profile.host)
         var group = profile.group
+        // Until the gateway shows the profile's group is the one signing in, nothing is answered.
+        var groupSettled = profile.group == nil
         var groupChanges = 0
         var redirects = 0
-        var body = AnyConnectXML.initRequest(groupAccess: profile.server.absoluteString, groupSelect: group, externalBrowser: strap != nil)
+        var body = AnyConnectXML.initRequest(groupAccess: base.absoluteString, groupSelect: group, externalBrowser: strap != nil)
         var fresh = false
         var certificateRequests = 0
 
@@ -242,7 +267,25 @@ public struct AnyConnectSignIn: Sendable {
                 try move(to: next)
                 continue
             }
-            guard (200...299).contains(response.status) else { throw AnyConnectSignInError.http(response.status) }
+            guard (200...299).contains(response.status) else {
+                // A group URL that doesn't exist (ASA answers 404).
+                if response.status == 404, base != profile.server, let wanted = profile.group { throw AnyConnectSignInError.unknownGroup(wanted, choices: []) }
+                // Some gateways answer only on group URLs (one ASA's root is a 404 for
+                // OpenConnect's user agent, its group URLs aren't).
+                if response.status == 404, !groupSettled, let wanted = group, profile.server.path == "/",
+                   let next = Self.groupURL(profile.server, group: wanted) {
+                    groupSettled = true
+                    base = next
+                    url = next
+                    group = nil
+                    body = AnyConnectXML.initRequest(groupAccess: next.absoluteString, groupSelect: nil, externalBrowser: strap != nil)
+                    continue
+                }
+                // Some ASAs answer 404 to OpenConnect's user agent and 200 to "AnyConnect". Not
+                // switched silently: the tunnel connects with the profile's user agent too.
+                if response.status == 404, profile.userAgent == nil { throw AnyConnectSignInError.notFoundForUserAgent }
+                throw AnyConnectSignInError.http(response.status)
+            }
 
             let reply: AnyConnectReply
             do { reply = try AnyConnectReply.parse(response.body) } catch let f as AnyConnectReply.Failure {
@@ -258,10 +301,10 @@ public struct AnyConnectSignIn: Sendable {
                 certificateRequests += 1
                 if hasClientCertificate && certificateRequests == 1 {
                     fresh = true
-                    body = AnyConnectXML.initRequest(groupAccess: profile.server.absoluteString, groupSelect: group, externalBrowser: strap != nil)
+                    body = AnyConnectXML.initRequest(groupAccess: base.absoluteString, groupSelect: group, externalBrowser: strap != nil)
                 } else if certificateRequests <= (hasClientCertificate ? 2 : 1) {
                     // The gateway may offer another way in (a password form) once it knows.
-                    body = AnyConnectXML.initRequest(groupAccess: profile.server.absoluteString, groupSelect: group, clientCertFailed: true, externalBrowser: strap != nil)
+                    body = AnyConnectXML.initRequest(groupAccess: base.absoluteString, groupSelect: group, clientCertFailed: true, externalBrowser: strap != nil)
                 } else {
                     throw hasClientCertificate ? AnyConnectSignInError.clientCertificateRejected : AnyConnectSignInError.clientCertificateRequired
                 }
@@ -287,6 +330,34 @@ public struct AnyConnectSignIn: Sendable {
             guard let form = reply.form else {
                 if reply.error == "Certificate Validation Failure" { throw AnyConnectSignInError.clientCertificateRejected }
                 throw AnyConnectSignInError.server(reply.error ?? reply.message ?? "The gateway refused the sign-in")
+            }
+
+            // The profile's group, before anything is answered: single sign-on included, which
+            // would otherwise sign in to whatever group the gateway started with.
+            if !groupSettled, let wanted = group {
+                groupSettled = true
+                func same(_ a: String?) -> Bool { a?.caseInsensitiveCompare(wanted) == .orderedSame }
+                if let groupField = form.fields.first(where: \.isGroupList), case .select(let choices, let selected) = groupField.kind {
+                    // Listed: pick it by value or by the label the user sees.
+                    guard let match = choices.first(where: { same($0.value) || same($0.label) }) else {
+                        throw AnyConnectSignInError.unknownGroup(wanted, choices: choices.map(\.label))
+                    }
+                    if match.value != choices[selected].value {
+                        groupChanges += 1
+                        group = match.value
+                        url = base
+                        body = AnyConnectXML.initRequest(groupAccess: base.absoluteString, groupSelect: match.value, externalBrowser: strap != nil)
+                        continue
+                    }
+                } else if !same(reply.opaque?.child("group-alias")?.allText), !same(reply.opaque?.child("tunnel-group")?.allText),
+                          profile.server.path == "/", let next = Self.groupURL(profile.server, group: wanted) {
+                    // No list, and the gateway didn't take the name: try it as the group URL.
+                    base = next
+                    url = next
+                    group = nil
+                    body = AnyConnectXML.initRequest(groupAccess: next.absoluteString, groupSelect: nil, externalBrowser: strap != nil)
+                    continue
+                }
             }
 
             // SAML/SSO: a browser produces the token for the form's sso field.
@@ -352,9 +423,9 @@ public struct AnyConnectSignIn: Sendable {
                 groupChanges += 1
                 guard groupChanges <= Self.maxGroupChanges else { throw AnyConnectSignInError.tooManySteps }
                 group = picked
-                url = profile.server
+                url = base
                 answered = false
-                body = AnyConnectXML.initRequest(groupAccess: profile.server.absoluteString, groupSelect: picked, externalBrowser: strap != nil)
+                body = AnyConnectXML.initRequest(groupAccess: base.absoluteString, groupSelect: picked, externalBrowser: strap != nil)
                 continue
             }
 
@@ -384,7 +455,7 @@ public struct AnyConnectSignIn: Sendable {
                 values[field.name] = profile.username
                 usernameFilled = true
             case .select(let choices, let selected):
-                if field.isGroupList, let group, let match = choices.first(where: { $0.value == group || $0.label == group }) {
+                if field.isGroupList, let group, let match = choices.first(where: { $0.value.caseInsensitiveCompare(group) == .orderedSame || $0.label.caseInsensitiveCompare(group) == .orderedSame }) {
                     values[field.name] = match.value
                 } else {
                     values[field.name] = choices[selected].value

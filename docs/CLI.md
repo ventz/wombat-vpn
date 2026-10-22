@@ -47,7 +47,7 @@ themselves keep running when the app quits, and the offline tools work without i
 | `wombat delete <name>` | Delete the tunnel and its keys; you approve it in the app |
 | `wombat ondemand <name> on\|off [--no-wifi\|--wifi] [--no-ethernet\|--ethernet]` | Connect automatically (WireGuard only: AnyConnect needs a sign-in each time) |
 | `wombat ondemand <name> trust\|untrust <wifi-name>` | Disconnect on (or stop trusting) a Wi-Fi network |
-| `wombat killswitch <name> on\|off [--allow-lan]` | Block traffic outside the tunnel; the local network stays blocked unless `--allow-lan` |
+| `wombat killswitch <name> on\|off [--allow-lan]` | Block traffic outside the tunnel; the local network stays blocked unless `--allow-lan`, which also works with `off` for a split tunnel |
 | `wombat log <name>` | Recent log lines from the running tunnel |
 
 ## Diagnostics
@@ -100,7 +100,7 @@ anything that adds a tunnel or weakens protection asks you in the app first:
   when first connected
 - turning on-demand off, connecting on fewer interfaces, trusting a Wi-Fi network (even while
   on-demand is off)
-- allowing the local network through the kill switch
+- allowing the local network
 - turning the kill switch off and `export --with-keys` (Touch ID or password)
 
 The command waits while the dialog is open (up to two minutes) and never sends a request twice.

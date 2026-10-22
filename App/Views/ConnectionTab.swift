@@ -60,13 +60,18 @@ struct ConnectionTab: View {
 
             Section {
                 Toggle("Kill switch", isOn: $protection.killSwitch)
-                Toggle("Allow local network", isOn: $protection.allowLAN).disabled(!protection.killSwitch)
+                Toggle("Allow local network", isOn: $protection.allowLAN)
+                    .disabled(!protection.killSwitch && !tunnel.canAllowLANWithoutKillSwitch)
             } header: {
                 Text("Protection")
             } footer: {
-                Text(protection.allowLAN && protection.killSwitch
-                     ? "Local-network traffic bypasses the tunnel. That keeps printers, AirPlay and file sharing working, but on an untrusted Wi-Fi network it lets the network redirect some traffic (TunnelVision, LocalNet)."
-                     : "With the kill switch on, traffic goes only through the tunnel, also while it reconnects. Allowing the local network keeps printers, AirPlay and file sharing working.")
+                if !protection.killSwitch && !tunnel.canAllowLANWithoutKillSwitch {
+                    Text("Without the kill switch, macOS sends traffic for your local network outside the tunnel unless the tunnel routes that network itself. This switch takes effect with the kill switch on.")
+                } else {
+                    Text(protection.allowLAN
+                         ? "Local-network traffic bypasses the tunnel. That keeps printers, AirPlay and file sharing working, but on an untrusted Wi-Fi network it lets the network redirect some traffic (TunnelVision, LocalNet)."
+                         : "With the kill switch on, traffic goes only through the tunnel, also while it reconnects. Allowing the local network keeps printers, AirPlay and file sharing working.")
+                }
             }
 
             if let error {

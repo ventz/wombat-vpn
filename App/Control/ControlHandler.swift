@@ -244,8 +244,8 @@ final class ControlHandler {
                         guard await authenticate(reason: "turn off the kill switch for “\(t.name)” (asked by the wombat command)") else {
                             return declinedFailure(nil)
                         }
-                    } else if protection.killSwitch, !current.allowLAN, protection.allowLAN,
-                              !confirm(title: "Allow the local network for “\(t.name)”?", detail: "The wombat command asked to let local-network traffic bypass the kill switch.", action: "Allow") {
+                    } else if !current.allowLAN, protection.allowLAN,
+                              !confirm(title: "Allow the local network for “\(t.name)”?", detail: "The wombat command asked to let local-network traffic bypass the tunnel.", action: "Allow") {
                         return declinedFailure("Change")
                     }
                     try await store.setProtection(t, protection)

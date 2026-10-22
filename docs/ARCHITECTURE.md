@@ -185,7 +185,11 @@ AnyConnect VPNs are a second engine with the same rules, in a separate process
 - **Kill switch** (`includeAllNetworks`) is on by default for full-tunnel imports, and for a split
   tunnel edited into a full one, with the local network blocked. That defends against routes the local network controls: DHCP option 121
   (TunnelVision, CVE-2024-3661) and spoofed local subnets (TunnelCrack LocalNet, CVE-2023-36672).
-  "Allow local network" is a per-tunnel opt-in.
+  "Allow local network" is a per-tunnel opt-in (`excludeLocalNetworks`). macOS honors it only
+  with `includeAllNetworks` or `enforceRoutes`. Without the kill switch it also sets
+  `enforceRoutes`, for WireGuard split tunnels only: `enforceRoutes` doesn't apply to default
+  routes (Apple, developer forums thread 832079), and an AnyConnect gateway picks its own routes.
+  Full tunnels and AnyConnect leave local subnets to the routing table's more specific routes.
 - **DNS:** with DNS servers set, all lookups go to them (`matchDomains = [""]`). The review warns
   when a full tunnel sets no DNS, or when a DNS server is outside AllowedIPs.
 - **Endpoint lookups under the kill switch:** with `includeAllNetworks`, macOS blocks the system
