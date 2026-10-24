@@ -46,9 +46,7 @@ final class SignInCoordinator: ObservableObject {
     private var task: Task<AnyConnectSession, Error>?
     private(set) var busy = false
 
-    struct Busy: LocalizedError {
-        var errorDescription: String? { "Another sign-in is in progress; finish or cancel it first" }
-    }
+    typealias Busy = SignInBusy
 
     struct MissingCertificate: LocalizedError {
         var errorDescription: String? {
@@ -58,8 +56,10 @@ final class SignInCoordinator: ObservableObject {
 
     func signIn(tunnelID: UUID, name: String, profile: OpenConnectProfile) async throws -> AnyConnectSession {
         guard !busy else {
-            // The sign-in may be out of sight: bring it back rather than only failing.
+            // The sign-in may be out of sight: bring it back rather than only failing. The error
+            // isn't kept on the VPN (TunnelErrorRules.shownError), so say it here (A-M1).
             showPanel()
+            say(Busy().errorDescription ?? "", .high)
             throw Busy()
         }
         busy = true
@@ -310,7 +310,7 @@ struct SignInView: View {
                     }
                     Text("The sign-in page for \(request.loginURL.host() ?? coordinator.server) opened in your default browser. Finish signing in there.")
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("This stays here until you're signed in. Then Wombat connects, and it goes away on its own.")
+                    Text("This stays here until you're signed in, for up to \(BrowserSignIn.timeoutMinutes) minutes. Then Wombat connects, and it goes away on its own.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack {

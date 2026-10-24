@@ -40,14 +40,22 @@ final class BrowserSignIn: @unchecked Sendable {
     private let open: @Sendable (URL) -> Void
     private let gatewayHost: String?
     private let request: SSORequest
+    /// A sign-in left open in the browser would otherwise hold the one-at-a-time sign-in (and
+    /// the port) until Cancel: "Another sign-in is in progress" on every later connect.
+    private let timeout: DispatchTimeInterval
 
     init(request: SSORequest, accepts: @escaping @Sendable (Data) -> Bool = { _ in true },
+         timeout: DispatchTimeInterval = .seconds(timeoutMinutes * 60),
          open: @escaping @Sendable (URL) -> Void = { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }) {
         self.open = open
+        self.timeout = timeout
         self.accepts = accepts
         self.request = request
         gatewayHost = URL(string: request.finalURL)?.host?.lowercased()
     }
+
+    static let timeoutMinutes = 10
+    static let timedOut = "The sign-in in the browser wasn't finished within \(timeoutMinutes) minutes. Connect again to start over."
 
     private static let portBusy =
         "Wombat couldn't listen on localhost port 29786 for the browser's answer. Another VPN client (Cisco Secure Client) may be using it; quit it, or sign in with Wombat's window (Edit VPN › Advanced)."
@@ -55,13 +63,22 @@ final class BrowserSignIn: @unchecked Sendable {
     /// Opens the login page and waits for the browser to come back (or `cancel()`).
     func run() async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
-            queue.async {
+            queue.async { [self] in
+                // Canceled before this block ran: finish() found no continuation to resume, and
+                // listening now would hold the port and the sign-in forever (review round 1, S-L5).
+                if self.done { return continuation.resume(throwing: CancellationError()) }
                 self.continuation = continuation
                 do {
                     try self.listen()
                 } catch {
                     return self.finish(.failure(Failure(errorDescription: Self.portBusy)))
                 }
+                // finish() runs once, so a timer firing after an answer or a cancel does nothing.
+                // Weak, so a finished sign-in isn't kept for the rest of the timeout.
+                let timedOut = Failure(errorDescription: Self.timedOut)
+                // Wall clock: DispatchTime stops while the Mac sleeps (like pitfall 6), and a lid
+                // closed overnight would otherwise not count.
+                self.queue.asyncAfter(wallDeadline: .now() + self.timeout) { [weak self] in self?.finish(.failure(timedOut)) }
                 // The page opens once the listener is ready (stateUpdateHandler): opened before,
                 // a process already holding the port could still receive the browser's answer
                 // while Wombat reports the port as busy (review NEW-10).

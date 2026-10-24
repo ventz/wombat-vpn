@@ -30,7 +30,29 @@ final class Tunnel: ObservableObject, Identifiable {
     @Published var lastError: String?
     /// The error says the network extension is off: the UI offers to open its settings. Derived
     /// from the message, so a later, unrelated error never shows the button (quality-3).
-    var errorNeedsExtension: Bool { lastError == ExtensionSecrets.notRunning || lastError == ExtensionSecrets.openConnectNotRunning }
+    var errorNeedsExtension: Bool { lastError.map(Self.extensionErrors.contains) == true }
+    static let extensionErrors: Set<String> = [ExtensionSecrets.notRunning, ExtensionSecrets.openConnectNotRunning]
+    /// Bumped by every start and every stop the app makes, so a hand-off still waiting for an
+    /// earlier start can tell that its result no longer describes the tunnel.
+    private(set) var startCount = 0
+    /// When this app last started the tunnel: a session that connected before it is an older one.
+    private(set) var lastStartAt: Date?
+    /// The app stopped it (the user's disconnect, or switching tunnels): the extension's reason
+    /// for that stop ("canceled") isn't an error to show.
+    private(set) var stoppedByApp = false
+
+    func markStart() -> (count: Int, at: Date) {
+        startCount += 1
+        stoppedByApp = false
+        let at = Date()
+        lastStartAt = at
+        return (startCount, at)
+    }
+
+    func markStop() {
+        startCount += 1
+        stoppedByApp = true
+    }
     /// The last engine log lines fetched from the extension, kept after the tunnel stops.
     @Published var recentLog: [String] = []
 
@@ -93,6 +115,12 @@ final class Tunnel: ObservableObject, Identifiable {
         if let demoStatus { status = demoStatus; return }
         #endif
         status = manager.connection.status
+        // Up since the last start means the extension started it from its current copy (it
+        // refuses any other): "didn't start" is stale. Also at launch, via reload. A session from
+        // before the start (a stop that stalled during a reconnect) doesn't count.
+        let up = TunnelErrorRules.isUp(since: lastStartAt, connected: status == .connected, connectedDate: manager.connection.connectedDate)
+        let kept = TunnelErrorRules.error(lastError, tunnelIsUp: up, extensionErrors: Self.extensionErrors)
+        if kept != lastError { lastError = kept }
     }
 
     #if DEBUG
@@ -205,7 +233,7 @@ final class TunnelStore: ObservableObject {
                 if tunnel.status == .disconnected, !self.neutralizedServers { Task { await self.neutralizeServerAddresses() } }
                 // A start that fails ends in .disconnected; the extension's reason (for example
                 // the kill-switch DNS message) is only available from the connection.
-                if before == .connecting, tunnel.status == .disconnected {
+                if before == .connecting, tunnel.status == .disconnected, !tunnel.stoppedByApp {
                     tunnel.manager.connection.fetchLastDisconnectError { error in
                         guard let error else { return }
                         // macOS may wrap the provider's error; its own message is the useful one.
@@ -365,6 +393,8 @@ final class TunnelStore: ObservableObject {
             case .failed(let message): extensionProblem = message; skipped.insert(tunnel.engine); continue
             case .yes:  // current already
                 extensionProblem = nil
+                let kept = TunnelErrorRules.errorAfterExtensionAnswered(tunnel.lastError, extensionErrors: Tunnel.extensionErrors)
+                if kept != tunnel.lastError { tunnel.lastError = kept }
                 if pending.contains(tunnel.id) { pendingHandOff.remove(tunnel.id) }
                 continue
             case .no: break
@@ -697,7 +727,7 @@ final class TunnelStore: ObservableObject {
                 Self.setOnDemandEnabled(other.manager, false)
                 try? await other.manager.saveToPreferences()
             }
-            if other.isActive { other.manager.connection.stopVPNTunnel() }
+            if other.isActive { other.manager.connection.stopVPNTunnel(); other.markStop() }
         }
         try await tunnel.manager.loadFromPreferences()  // NE rejects starts on a stale copy
         if !tunnel.manager.isEnabled {
@@ -725,9 +755,10 @@ final class TunnelStore: ObservableObject {
             pendingHandOff.remove(tunnel.id)
             wakesExtension = false
         }
+        let start = tunnel.markStart()
         try tunnel.manager.connection.startVPNTunnel(options: options)
         tunnel.lastError = nil
-        if wakesExtension { Task { await handOffAfterLaunch(tunnel) } }
+        if wakesExtension { Task { await handOffAfterLaunch(tunnel, start: start) } }
     }
 
     /// An AnyConnect connect: sign in first (the user's forms or SSO; the current tunnel keeps
@@ -768,7 +799,7 @@ final class TunnelStore: ObservableObject {
                 Self.setOnDemandEnabled(other.manager, false)
                 try? await other.manager.saveToPreferences()
             }
-            if other.isActive { other.manager.connection.stopVPNTunnel() }
+            if other.isActive { other.manager.connection.stopVPNTunnel(); other.markStop() }
         }
         // Reconnecting (after an edit): the old session ends only now that the new one is in
         // hand, and before it is handed over (the extension's stop drops its session) (Q5-M8).
@@ -804,9 +835,10 @@ final class TunnelStore: ObservableObject {
             pendingHandOff.remove(tunnel.id)
             try await ExtensionSecrets.storeSession(id: tunnel.id, revision: revision, session: session)
         }
+        let start = tunnel.markStart()
         try tunnel.manager.connection.startVPNTunnel(options: options)
         tunnel.lastError = nil
-        if wakesExtension { Task { await handOffAfterLaunch(tunnel, session: session, revision: revision) } }
+        if wakesExtension { Task { await handOffAfterLaunch(tunnel, start: start, session: session, revision: revision) } }
     }
 
     private static func revision(_ tunnel: Tunnel) -> String {
@@ -824,28 +856,43 @@ final class TunnelStore: ObservableObject {
     }
 
     /// The start just launched the extension: hand over as soon as it answers (it waits up to
-    /// 10 s), then catch up on anything else that was waiting.
-    private func handOffAfterLaunch(_ tunnel: Tunnel, session: AnyConnectSession? = nil, revision: String? = nil) async {
-        for _ in 0..<36 {
-            try? await Task.sleep(for: .milliseconds(250))
-            do {
-                try await handOff(tunnel)
-                // The revision the session was signed for, not whatever is current now (S5D-M1):
-                // if the profile was edited meanwhile, the extension refuses the mismatch.
-                if let session { try await ExtensionSecrets.storeSession(id: tunnel.id, revision: revision ?? Self.revision(tunnel), session: session) }
-                await syncToExtension()
-                return
-            } catch let failure as ExtensionSecrets.Failure where failure.unreachable {
-                continue
-            } catch {
-                tunnel.lastError = error.localizedDescription
-                announceFailure(tunnel, error)
-                return
-            }
+    /// 10 s; the app a little longer, so its "didn't start" never comes before the extension's
+    /// own reason), then catch up on anything else that was waiting.
+    private func handOffAfterLaunch(_ tunnel: Tunnel, start: (count: Int, at: Date), session: AnyConnectSession? = nil, revision: String? = nil) async {
+        let outcome = await LaunchHandOff.run(attempts: 48, interval: .milliseconds(250), deliver: {
+            try await handOff(tunnel)
+            // The revision the session was signed for, not whatever is current now (S5D-M1):
+            // if the profile was edited meanwhile, the extension refuses the mismatch.
+            // Not after a disconnect: the stop already ran, and nothing would drop the session.
+            guard tunnel.startCount == start.count else { throw CancellationError() }
+            if let session { try await ExtensionSecrets.storeSession(id: tunnel.id, revision: revision ?? Self.revision(tunnel), session: session) }
+        }, isUnreachable: { ($0 as? ExtensionSecrets.Failure)?.unreachable == true },
+        isCurrent: { tunnel.startCount == start.count }, tunnelIsUp: {
+            // Asked now, not from the last notification, and not via refreshStatus(), which
+            // would make the status observer miss the change. Only a session that connected
+            // after this start counts: during a reconnect the old one may still be up (review
+            // round 1, security L3).
+            let connection = tunnel.manager.connection
+            return TunnelErrorRules.isUp(since: start.at, connected: [.connected, .reasserting].contains(connection.status),
+                                         connectedDate: connection.connectedDate)
+        })
+        switch outcome {
+        case .delivered:
+            await syncToExtension()
+        case .failed(let message):
+            tunnel.lastError = message
+            announceFailure(tunnel, ExtensionSecrets.Failure(errorDescription: message))
+        case .unreachableWhileUp:
+            // It started from its own current copy (it refuses any other): not an error.
+            // An error in the log (wombat doctor, sysdiagnose): edits can't reach it either.
+            log.error("The extension did not answer within 12 s, but \(tunnel.name, privacy: .public) is up")
+        case .superseded:
+            log.notice("Hand-off for an earlier start of \(tunnel.name, privacy: .public) dropped")
+        case .extensionNotRunning:
+            log.error("The extension did not start within 12 s")
+            tunnel.lastError = TunnelErrorRules.errorAfterGivingUp(tunnel.lastError, notRunning: ExtensionSecrets.notRunningMessage(tunnel.engine))
+            announceFailure(tunnel, ExtensionSecrets.Failure(errorDescription: tunnel.lastError))
         }
-        log.error("The extension did not start within 9 s")
-        tunnel.lastError = ExtensionSecrets.notRunningMessage(tunnel.engine)
-        announceFailure(tunnel, ExtensionSecrets.Failure(errorDescription: tunnel.lastError))
     }
 
     /// Looks up the tunnel's endpoint hostnames now, while nothing blocks the system resolver, so
@@ -875,15 +922,19 @@ final class TunnelStore: ObservableObject {
             try await tunnel.manager.saveToPreferences()
         }
         tunnel.manager.connection.stopVPNTunnel()
+        // Turned off on purpose: an old failure no longer describes this tunnel, and a hand-off
+        // still waiting for its start must not write one later.
+        tunnel.markStop()
+        tunnel.lastError = nil
     }
 
     func toggle(_ tunnel: Tunnel) async {
         do {
             if tunnel.isActive { try await disconnect(tunnel) } else { try await connect(tunnel) }
-        } catch AnyConnectSignInError.canceled {
-            // A cancel the user chose isn't a failure (A5-M6).
         } catch {
-            tunnel.lastError = error.localizedDescription
+            // A cancel the user chose isn't a failure (A5-M6); a busy sign-in was brought forward.
+            guard let text = TunnelErrorRules.shownError(for: error) else { return }
+            tunnel.lastError = text
             announceFailure(tunnel, error)
         }
     }
