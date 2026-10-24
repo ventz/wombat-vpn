@@ -24,6 +24,8 @@ wrangler_install() {
 wrangler() {
     wrangler_install || return 1
     (
+        # The .env is run as shell code: release.sh's Sparkle key mustn't be in scope for it.
+        unset sparkle_key
         set -a
         # shellcheck disable=SC1090
         source "$CF_ENV"

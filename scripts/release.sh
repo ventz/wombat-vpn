@@ -13,7 +13,9 @@
 #   - Xcode signed in to the team, the Developer ID Application certificate (scripts/build-signed.sh)
 #   - the notarytool profile (WOMBAT_NOTARY_PROFILE, default ventz-notary)
 #   - Wombat's Sparkle EdDSA key in the login keychain, account "wombat"
-#     (generate_keys --account wombat); never Moo's or Tardy's
+#     (generate_keys --account wombat); never Moo's or Tardy's. Read once per release, dry
+#     runs too: one keychain prompt, for /usr/bin/security (click Allow, not Always Allow)
+#   - /usr/bin/swift (Xcode license accepted), which checks the key against SUPublicEDKey
 #   - ~/.config/cloudflare/.env with CLOUDFLARE_ADMIN_TOKEN (loaded only for wrangler)
 #   - a logged-in gh, when origin is a GitHub repository
 #   - a checkout of ventz/homebrew-tap at ~/git/homebrew-tap (WOMBAT_TAP_DIR), for the cask
@@ -21,6 +23,9 @@
 # Adapted from Moo's release.sh; its guards (signed-feed checks, never overwriting a published
 # archive, cache-busting before first publish) are kept with their reasons.
 
+# bash takes PS4 from the environment and expands it on every traced line: pinned, so `bash -x`
+# can't be made to print the Sparkle key held in lib-release-signing.sh.
+PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
 trap 'echo "release.sh: line $LINENO failed (exit $?): $BASH_COMMAND" >&2' ERR
 
@@ -47,7 +52,7 @@ while [[ $# -gt 0 ]]; do
         --notes) [[ $# -ge 2 ]] || { echo "--notes needs an .html file" >&2; exit 2; }
                  notes_file="$2"; shift 2 ;;
         --dry-run) dry_run=1; shift ;;
-        -h|--help) sed -n '2,23p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -67,6 +72,10 @@ fresh() { printf '%s?cb=%s' "$1" "$(date +%s)"; }
 
 # shellcheck source=scripts/lib-wrangler.sh
 source scripts/lib-wrangler.sh  # the working directory is the repo root here
+# shellcheck source=scripts/lib-release-signing.sh
+source scripts/lib-release-signing.sh
+# Any later EXIT trap must call sparkle_key_clear too: a new trap replaces this one.
+trap sparkle_key_clear EXIT
 
 # --- Preflight ----------------------------------------------------------------------------------
 # Every check here fails a release long before notarizing would.
@@ -144,6 +153,28 @@ if [[ $dry_run -eq 0 ]]; then
     fi
 fi
 
+# One keychain read (one prompt, for /usr/bin/security) replaces a prompt for every Sparkle tool
+# run below. A wrong key is caught here, against the source Info.plist, rather than after the
+# build; the built app's key is checked again below.
+say "Reading the Sparkle key from the keychain (account $SPARKLE_ACCOUNT): click Allow"
+sparkle_key_load || exit 1
+# PlistBuddy prints some errors on stdout ("File Doesn't Exist"): a failed read counts as empty.
+source_plist_key=$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" App/Info.plist 2>/dev/null) \
+    || source_plist_key=""
+[[ -n "$source_plist_key" ]] || { echo "App/Info.plist has no SUPublicEDKey" >&2; exit 1; }
+key_check=0
+sparkle_key_matches "$source_plist_key" || key_check=$?
+if [[ $key_check -ne 0 ]]; then
+    if [[ $key_check -eq 2 ]]; then
+        echo "could not check the Sparkle key against App/Info.plist (see above)" >&2
+    else
+        echo "the Sparkle key in the keychain (account $SPARKLE_ACCOUNT) does not match SUPublicEDKey in App/Info.plist" >&2
+        echo "  App/Info.plist: $source_plist_key" >&2
+    fi
+    exit 1
+fi
+echo "Sparkle key matches SUPublicEDKey"
+
 # --- Build --------------------------------------------------------------------------------------
 # build-signed.sh archives, exports with Developer ID (which signs the nested Sparkle code and
 # grants the system-extension entitlement), audits every signature, notarizes and staples the app.
@@ -171,16 +202,24 @@ fi
 
 say "Version $version (build $build_number), architectures: $(lipo -archs "$app/Contents/MacOS/Wombat")"
 
-# Installed copies verify with the SUPublicEDKey built into them; sign_update --verify uses the
-# keychain's key, so it can't catch the two differing. Compared now, before notarizing the DMG.
-plist_key=$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$app/Contents/Info.plist" 2>/dev/null || true)
-keychain_key=$("$sparkle_bin/generate_keys" --account "$SPARKLE_ACCOUNT" -p 2>/dev/null || true)
-keychain_key=${keychain_key//[[:space:]]/}
-if [[ -z "$plist_key" || -z "$keychain_key" || "$plist_key" != "$keychain_key" ]]; then
-    echo "the Sparkle key in the keychain (account $SPARKLE_ACCOUNT) does not match SUPublicEDKey --" \
-        "updates signed with it would be refused by every installed copy" >&2
-    echo "  app:      ${plist_key:-<none>}" >&2
-    echo "  keychain: ${keychain_key:-<none>}" >&2
+# Installed copies verify with the SUPublicEDKey built into them; sign_update --verify checks
+# against the signing key's own public half, so it can't catch the two differing. generate_keys
+# -p would read the keychain again (another prompt), so the key is proven by signing a probe.
+# Compared now, before notarizing the DMG. Once they match, every --verify below is a check
+# against SUPublicEDKey.
+plist_key=$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$app/Contents/Info.plist" 2>/dev/null) \
+    || plist_key=""
+[[ -n "$plist_key" ]] || { echo "the built app has no SUPublicEDKey in its Info.plist" >&2; exit 1; }
+key_check=0
+sparkle_key_matches "$plist_key" || key_check=$?
+if [[ $key_check -ne 0 ]]; then
+    if [[ $key_check -eq 2 ]]; then
+        echo "could not check the Sparkle key against the built app (see above)" >&2
+    else
+        echo "the Sparkle key in the keychain (account $SPARKLE_ACCOUNT) does not match SUPublicEDKey --" \
+            "updates signed with it would be refused by every installed copy" >&2
+    fi
+    echo "  app: $plist_key" >&2
     exit 1
 fi
 
@@ -225,7 +264,7 @@ remote_feed="$remote_dir/appcast.xml"
 feed_status=$(curl -s -o "$remote_feed" -w '%{http_code}' "$(fresh "$FEED_HOST/appcast.xml")" || true)
 case "$feed_status" in
     200)
-        "$sparkle_bin/sign_update" --account "$SPARKLE_ACCOUNT" --verify "$remote_feed" \
+        sparkle_tool sign_update --verify "$remote_feed" \
             || { echo "the published feed's signature does not verify -- not building on it" >&2; exit 1; }
         command mv -f "$remote_feed" "$release_dir/appcast.xml" ;;
     404) ;;
@@ -233,7 +272,7 @@ case "$feed_status" in
 esac
 command rm -rf "$remote_dir"
 
-"$sparkle_bin/generate_appcast" --account "$SPARKLE_ACCOUNT" \
+sparkle_tool generate_appcast \
     --download-url-prefix "$FEED_HOST/" \
     --maximum-versions 5 \
     "$release_dir"
@@ -245,7 +284,7 @@ if [[ "$feed" == *"<sparkle:releaseNotesLink>"* ]]; then
 fi
 # The app sets SURequireSignedFeed: an unsigned or edited feed strands every copy.
 [[ "$feed" == *"sparkle-signatures:"* ]] || { echo "generate_appcast did not sign the feed -- not publishing" >&2; exit 1; }
-"$sparkle_bin/sign_update" --account "$SPARKLE_ACCOUNT" --verify "$release_dir/appcast.xml" \
+sparkle_tool sign_update --verify "$release_dir/appcast.xml" \
     || { echo "the feed's signature does not verify -- not publishing" >&2; exit 1; }
 [[ "$feed" == *"<sparkle:version>$build_number</sparkle:version>"* ]] \
     || { echo "the generated feed does not list build $build_number -- not publishing" >&2; exit 1; }
@@ -302,8 +341,9 @@ say "Verifying the published feed"
 live_dir=$(mktemp -d "${TMPDIR:-/tmp}/wombat-live-feed.XXXXXX")
 curl -fsS -o "$live_dir/appcast.xml" "$(fresh "$FEED_HOST/appcast.xml")" \
     || { echo "could not download the feed just published -- CHECK $FEED_HOST/appcast.xml NOW" >&2; exit 1; }
-"$sparkle_bin/sign_update" --account "$SPARKLE_ACCOUNT" --verify "$live_dir/appcast.xml" \
+sparkle_tool sign_update --verify "$live_dir/appcast.xml" \
     || { echo "THE PUBLISHED FEED DOES NOT VERIFY -- republish $release_dir/appcast.xml" >&2; exit 1; }
+sparkle_key_clear  # the last use
 live_feed=$(cat "$live_dir/appcast.xml")
 command rm -rf "$live_dir"
 [[ "$live_feed" == *"<sparkle:version>$build_number</sparkle:version>"* ]] \

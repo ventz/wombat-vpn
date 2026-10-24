@@ -103,9 +103,35 @@ One-time setup:
 
 - **Sparkle key**, Wombat's own (never Moo's or Tardy's), in the login keychain:
   `build/DerivedDataRelease/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys --account wombat`.
-  Its public half is `SUPublicEDKey` in `App/Info.plist`; the script refuses to publish if they
-  differ. Back up the private key (`generate_keys --account wombat -x <file>`): without it, no
-  installed copy will ever accept another update.
+  Its public half is `SUPublicEDKey` in `App/Info.plist`. Back up the private key in a password
+  manager (Keychain Access › the `https://sparkle-project.org` item, account `wombat` › Show
+  password; Universal Clipboard can pass it to your other devices, so turn Handoff off first and
+  clear the clipboard after pasting it): without it, no installed copy will ever accept another
+  update.
+
+  `release.sh` reads it **once per release** (`scripts/lib-release-signing.sh`):
+  `/usr/bin/security find-generic-password -s https://sparkle-project.org -a wombat -w` into a
+  shell variable, handed to `sign_update` and `generate_appcast` on stdin (`--ed-key-file -`), so
+  no Sparkle tool asks the keychain itself (that was one prompt per run, about four per
+  release). The key never goes into argv, a file or a trace, and is cleared after its last use.
+  `generate_keys -p` would read the keychain again, so the script proves the key matches
+  `SUPublicEDKey` by signing a random probe and verifying it with CryptoKit: before the build
+  (against `App/Info.plist`) and after it (against the built app), which needs `/usr/bin/swift`.
+  Dry runs read and check it too. The key stays in an unexported shell variable for the whole
+  run (build, notarization, uploads). The guards stop accidental leaks, such as `bash -x` or a
+  `PS4` from the environment; the environment itself (`BASH_ENV`, imported shell functions) is
+  trusted.
+
+  **The one prompt** reads "security wants to use your confidential information stored in
+  "https://sparkle-project.org" in your keychain" (it may also ask for the login keychain
+  password). Click **Allow**, not **Always Allow**. Always Allow adds `/usr/bin/security` to the
+  item's access list, and after that any process running as you can read the update-signing key
+  silently with the same command. If it was clicked, removing `security` from the item's Access
+  Control tab in Keychain Access may not undo it all (the item's partition list isn't shown
+  there): the safe undo is to delete the item and import the key again from the backup with
+  `generate_keys --account wombat -f <file>`, the file made with `umask 077` in a folder that
+  isn't synced or indexed (not the Desktop, Documents or this repo), deleted right after.
+  codesign's prompts for the Developer ID key are separate.
 - **Cloudflare:** `~/.config/cloudflare/.env` with `CLOUDFLARE_ADMIN_TOKEN`, or better a
   `WOMBAT_R2_TOKEN` limited to the R2 bucket (used first when set). The scripts pass only that
   token to wrangler, which `scripts/lib-wrangler.sh` installs from `scripts/tools/package-lock.json`
