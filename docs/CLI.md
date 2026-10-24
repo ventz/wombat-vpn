@@ -192,7 +192,7 @@ startup file) and puts a link to the script inside Wombat.app where each one loo
 - It never replaces a file that isn't Wombat's unless you pass `--force`, which keeps it as a
   backup. A copy you saved by hand earlier is moved aside (as a backup) and replaced by a link.
 - The link points into Wombat.app, so it stays current when Wombat updates itself. Run it from the
-  `wombat` inside `/Applications/Wombat.app`, not from the disk image.
+  `wombat` inside `/Applications/Wombat.app`, not from the disk image or a development build.
 - `--dir DIR` puts the file in that folder for one shell and changes no startup file.
 - `wombat completion status` lists what is in place; `wombat completion uninstall` removes the
   links and the marked lines it added, and nothing else.

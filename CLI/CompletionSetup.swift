@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import TunnelCore
 
 // `wombat completion install|uninstall|status`: puts the completion scripts that ship in the app
 // where each shell looks for them, for this user only.
@@ -224,6 +225,13 @@ struct CompletionSetup {
             }
             if source.hasPrefix("/Volumes/") || source.contains("/AppTranslocation/") {
                 printErr("wombat: this wombat runs from \(source.hasPrefix("/Volumes/") ? "a disk image" : "a temporary copy macOS made"); move Wombat to /Applications and run its wombat")
+                failed = true
+                return
+            }
+            // A development build's bundle goes away on the next clean, and the link would
+            // dangle wherever the completions folder is synced (a dotfiles repository, say).
+            if BuildLocation.isDevelopmentBuild(source) {
+                printErr("wombat: this wombat is a development build (\(source)); run the wombat inside the installed Wombat.app (/Applications)")
                 failed = true
                 return
             }
