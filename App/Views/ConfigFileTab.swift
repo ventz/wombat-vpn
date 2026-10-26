@@ -19,7 +19,8 @@ struct ConfigFileTab: View {
                 editor
             } else {
                 ScrollView {
-                    Text(tunnel.isOpenConnect ? tunnel.profile.map(OpenConnectFile.serialize) ?? ""
+                    Text(tunnel.isTailnet ? tunnel.tailnetProfile.map(TailnetFile.serialize) ?? ""
+                         : tunnel.isOpenConnect ? tunnel.profile.map(OpenConnectFile.serialize) ?? ""
                          : tunnel.configuration.map { WgQuick.serialize($0, includePrivateKey: false) } ?? "")
                         .font(.body.monospaced())
                         .textSelection(.enabled)
@@ -40,6 +41,9 @@ struct ConfigFileTab: View {
                     Button("Save") { Task { await save() } }
                         .keyboardShortcut("s")
                         .disabled(saving || !WgQuick.parse(text).errors.isEmpty)
+                } else if tunnel.isTailnet {
+                    Spacer()
+                    Text("No keys here: the Tailnet extension keeps this Mac's node key").font(.callout)
                 } else if tunnel.isOpenConnect {
                     Spacer()
                     Text("No passwords or keys: you sign in at each connect").font(.callout)

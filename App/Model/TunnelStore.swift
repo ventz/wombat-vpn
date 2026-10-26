@@ -31,7 +31,7 @@ final class Tunnel: ObservableObject, Identifiable {
     /// The error says the network extension is off: the UI offers to open its settings. Derived
     /// from the message, so a later, unrelated error never shows the button (quality-3).
     var errorNeedsExtension: Bool { lastError.map(Self.extensionErrors.contains) == true }
-    static let extensionErrors: Set<String> = [ExtensionSecrets.notRunning, ExtensionSecrets.openConnectNotRunning]
+    static let extensionErrors: Set<String> = [ExtensionSecrets.notRunning, ExtensionSecrets.openConnectNotRunning, ExtensionSecrets.tailnetNotRunning]
     /// Bumped by every start and every stop the app makes, so a hand-off still waiting for an
     /// earlier start can tell that its result no longer describes the tunnel.
     private(set) var startCount = 0
@@ -56,25 +56,45 @@ final class Tunnel: ObservableObject, Identifiable {
     /// The last engine log lines fetched from the extension, kept after the tunnel stops.
     @Published var recentLog: [String] = []
 
-    enum Kind: String { case wireGuard, openConnect }
+    enum Kind: String { case wireGuard, openConnect, tailnet }
 
     init(manager: NETunnelProviderManager, id: UUID) {
         self.manager = manager
         self.id = id
         let bundle = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier
-        kind = bundle == AppIdentity.openConnectExtensionBundleID ? .openConnect : .wireGuard
+        switch ExtensionSecrets.Engine(bundleID: bundle) {
+        case .openConnect: kind = .openConnect
+        case .tailnet: kind = .tailnet
+        case .wireGuard, nil: kind = .wireGuard
+        }
         status = manager.connection.status
     }
 
-    var engine: ExtensionSecrets.Engine { kind == .openConnect ? .openConnect : .wireGuard }
-    var isOpenConnect: Bool { kind == .openConnect }
-    /// Where the tunnel goes, for lists: the AnyConnect gateway or the first peer's endpoint.
-    var serverText: String? {
-        isOpenConnect ? profile?.displayServer : configuration?.peers.first?.endpoint?.hostString
+    var engine: ExtensionSecrets.Engine {
+        switch kind {
+        case .wireGuard: .wireGuard
+        case .openConnect: .openConnect
+        case .tailnet: .tailnet
+        }
     }
+    var isOpenConnect: Bool { kind == .openConnect }
+    var isTailnet: Bool { kind == .tailnet }
+    /// Where the tunnel goes, for lists: the AnyConnect gateway, the tailnet's coordination
+    /// server or the first peer's endpoint.
+    var serverText: String? {
+        switch kind {
+        case .openConnect: profile?.displayServer
+        case .tailnet: tailnetProfile?.displayServer
+        case .wireGuard: configuration?.peers.first?.endpoint?.hostString
+        }
+    }
+    /// A tailnet's profile (no secret), from the app's keychain copy.
+    @Published var tailnetProfile: TailnetProfile?
+    /// The Tailnet extension's last status for this tunnel (polled while it runs).
+    @Published var tailnetStatus: TailnetStatus?
     /// "WireGuard", "AmneziaWG" or "AnyConnect".
     var protocolName: String {
-        isOpenConnect ? "AnyConnect" : (configuration?.isAmnezia == true ? "AmneziaWG" : "WireGuard")
+        isTailnet ? "Tailnet" : isOpenConnect ? "AnyConnect" : (configuration?.isAmnezia == true ? "AmneziaWG" : "WireGuard")
     }
 
     var name: String { manager.localizedDescription ?? "Tunnel" }
@@ -115,6 +135,8 @@ final class Tunnel: ObservableObject, Identifiable {
         if let demoStatus { status = demoStatus; return }
         #endif
         status = manager.connection.status
+        // A tailnet's status describes the running node only; a later connect starts fresh.
+        if status != .connected, tailnetStatus != nil { tailnetStatus = nil }
         // Up since the last start means the extension started it from its current copy (it
         // refuses any other): "didn't start" is stale. Also at launch, via reload. A session from
         // before the start (a stop that stalled during a reconnect) doesn't count.
@@ -149,6 +171,10 @@ final class Tunnel: ObservableObject, Identifiable {
     func loadConfiguration() {
         guard let reference = proto?.passwordReference else { configuration = nil; profile = nil; findings = []; return }
         let text = try? ConfigKeychain.read(reference)
+        if isTailnet {
+            tailnetProfile = text.flatMap { TailnetFile.parse($0).profile }
+            return
+        }
         if isOpenConnect {
             profile = text.flatMap { OpenConnectFile.parse($0).profile }
             clientCertificateName = profile?.clientCertificate.map { ClientIdentities.item(sha256: $0)?.name ?? "" }
@@ -194,6 +220,9 @@ final class TunnelStore: ObservableObject {
     private let log = Logger(subsystem: AppIdentity.logSubsystem, category: "app")
     /// Called when an AnyConnect VPN exists, so the app activates the OpenConnect extension.
     var needsOpenConnect: (() -> Void)?
+    /// Activates the Tailnet extension; set by the app model, called once a tailnet exists.
+    var needsTailnet: (() -> Void)?
+    private var tailnetRequested = false
     /// Why the OpenConnect extension can't run yet (not approved, not in /Applications), or nil.
     /// Asked before a sign-in, so nobody approves a Duo push for a connect that can't start
     /// (quality-6 M3).
@@ -217,6 +246,9 @@ final class TunnelStore: ObservableObject {
     }
 
     init() {
+        // An extension that keeps dropping the connection is queued like one that isn't running,
+        // but shown (security-8 L1); an answer later clears it (syncPass).
+        ExtensionSecrets.onPersistentInterruption = { [weak self] message in self?.extensionProblem = message }
         statusObserver = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: .main) { [weak self] note in
             MainActor.assumeIsolated {
                 guard let self, let session = note.object as? NETunnelProviderSession,
@@ -232,8 +264,11 @@ final class TunnelStore: ObservableObject {
                 // A tunnel that was connected at launch gets the 1.2.0 migration now (quality-6 M1).
                 if tunnel.status == .disconnected, !self.neutralizedServers { Task { await self.neutralizeServerAddresses() } }
                 // A start that fails ends in .disconnected; the extension's reason (for example
-                // the kill-switch DNS message) is only available from the connection.
-                if before == .connecting, tunnel.status == .disconnected, !tunnel.stoppedByApp {
+                // the kill-switch DNS message) is only available from the connection. A tailnet
+                // can also be ended while up, by the plan gate or the owner check: its reason is
+                // fetched the same way (quality-9 M3).
+                let endedUnasked = before == .connecting || (tunnel.isTailnet && [.connected, .reasserting].contains(before))
+                if endedUnasked, tunnel.status == .disconnected, !tunnel.stoppedByApp {
                     tunnel.manager.connection.fetchLastDisconnectError { error in
                         guard let error else { return }
                         // macOS may wrap the provider's error; its own message is the useful one.
@@ -305,7 +340,7 @@ final class TunnelStore: ObservableObject {
             var next: [Tunnel] = []
             for manager in managers {
                 guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
-                      [AppIdentity.extensionBundleID, AppIdentity.openConnectExtensionBundleID].contains(proto.providerBundleIdentifier),
+                      ExtensionSecrets.Engine(bundleID: proto.providerBundleIdentifier) != nil,
                       let id = (proto.providerConfiguration?[ProviderConfigKey.tunnelID] as? String).flatMap(UUID.init) else { continue }
                 // Another account's tunnel (configurations are system-wide): not ours to show,
                 // start or change. Tunnels from before the owner was recorded count as ours only
@@ -331,6 +366,10 @@ final class TunnelStore: ObservableObject {
             if !openConnectRequested, tunnels.contains(where: \.isOpenConnect) {
                 openConnectRequested = true  // once per launch; adding a VPN or connecting asks again (Q5-L12)
                 needsOpenConnect?()
+            }
+            if !tailnetRequested, tunnels.contains(where: \.isTailnet) {
+                tailnetRequested = true
+                needsTailnet?()
             }
             // Forget queued hand-offs of tunnels that no longer exist (removed elsewhere, or a
             // failed add), so nothing waits for them forever (quality-3).
@@ -411,7 +450,7 @@ final class TunnelStore: ObservableObject {
         // Settings, would otherwise stay in its store forever. Only after a clean load: a failed
         // load must not look like "no tunnels".
         if loaded, loadError == nil {
-            for engine in [ExtensionSecrets.Engine.wireGuard, .openConnect] where !skipped.contains(engine) {
+            for engine in ExtensionSecrets.Engine.allCases where !skipped.contains(engine) {
                 let removed = await ExtensionSecrets.prune(engine, keeping: tunnels.filter { $0.engine == engine }.map(\.id))
                 if removed > 0 { log.notice("The \(engine.name, privacy: .public) dropped \(removed, privacy: .public) orphaned configuration(s)") }
             }
@@ -522,6 +561,68 @@ final class TunnelStore: ObservableObject {
         return try await save(proto, name: name, id: id, reference: reference)
     }
 
+    /// Saves a new tailnet (Tailscale or Headscale). Its profile holds no secret; the node's keys
+    /// are made by the Tailnet extension at the first sign-in and never leave it.
+    @discardableResult
+    func addTailnet(name requested: String, text: String) async throws -> Tunnel {
+        let parsed = TailnetFile.parse(text)
+        guard let profile = parsed.profile else {
+            throw StoreError.invalid(parsed.errors.map(\.description).joined(separator: "\n"))
+        }
+        needsTailnet?()
+        let name = TunnelName.unique(TunnelName.sanitize(requested), existing: tunnels.map(\.name))
+        let id = UUID()
+        let canonical = TailnetFile.serialize(profile)
+        let reference = try ConfigKeychain.store(canonical, tunnelID: id, name: name, kind: .tailnet)
+        let revision = UUID().uuidString
+        do {
+            try await ExtensionSecrets.store(.tailnet, id: id, text: canonical, revision: revision)
+        } catch let failure as ExtensionSecrets.Failure where failure.unreachable {
+            pendingHandOff.insert(id)
+        } catch {
+            ConfigKeychain.delete(reference)
+            throw error
+        }
+        let proto = NETunnelProviderProtocol()
+        proto.providerBundleIdentifier = AppIdentity.tailnetExtensionBundleID
+        proto.passwordReference = reference
+        proto.providerConfiguration = [ProviderConfigKey.formatVersion: 1, ProviderConfigKey.tunnelID: id.uuidString,
+                                       ProviderConfigKey.ownerUID: NSNumber(value: getuid()),
+                                       ProviderConfigKey.revision: revision,
+                                       ProviderConfigKey.onDemand: false]
+        proto.serverAddress = Self.neutralServerAddress  // SEC-9
+        // An overlay, not a full tunnel: no kill switch (spike design 2.6).
+        return try await save(proto, name: name, id: id, reference: reference)
+    }
+
+    /// Asks a running tailnet for a sign-in page (its URL then shows in the status).
+    /// Returns the sign-in page, already checked against the profile's own server; the URL is
+    /// never in the status polls (security-9-fable NV2).
+    func tailnetLogin(_ tunnel: Tunnel) async throws -> URL {
+        let reply = try await tailnetCommand(.tailnetLogin, tunnel)
+        guard let profile = tunnel.tailnetProfile, let text = reply.authURL,
+              TailnetControl.isValidLoginURL(text, control: profile.controlURL), let url = URL(string: text) else {
+            throw StoreError.invalid("The coordination server's sign-in page isn't on its own address; not opened")
+        }
+        return url
+    }
+
+    /// Signs a running tailnet out: the coordination server expires the node's key.
+    func tailnetLogout(_ tunnel: Tunnel) async throws {
+        _ = try await tailnetCommand(.tailnetLogout, tunnel)
+    }
+
+    private func tailnetCommand(_ message: ProviderMessage, _ tunnel: Tunnel) async throws -> TailnetCommandReply {
+        guard tunnel.isTailnet, let session = tunnel.manager.connection as? NETunnelProviderSession else {
+            throw StoreError.invalid("The tailnet isn't connected")
+        }
+        guard let data = await send(message, to: session), let reply = TailnetCommandReply.decode(data) else {
+            throw StoreError.invalid("The Tailnet extension didn't answer")
+        }
+        if let error = reply.error { throw StoreError.invalid(error) }
+        return reply
+    }
+
     private func save(_ proto: NETunnelProviderProtocol, name: String, id: UUID, reference: Data) async throws -> Tunnel {
         let manager = NETunnelProviderManager()
         manager.localizedDescription = name
@@ -531,7 +632,7 @@ final class TunnelStore: ObservableObject {
         // (with its on-demand rules and kill switch), and another account's first import used
         // to do exactly that (reviews SEC-7, NEW-4). connect() and on-demand enable it when used.
         manager.isEnabled = false
-        let engine: ExtensionSecrets.Engine = proto.providerBundleIdentifier == AppIdentity.openConnectExtensionBundleID ? .openConnect : .wireGuard
+        let engine = ExtensionSecrets.Engine(bundleID: proto.providerBundleIdentifier) ?? .wireGuard
         do {
             try await manager.saveToPreferences()
         } catch {
@@ -626,6 +727,14 @@ final class TunnelStore: ObservableObject {
     }
 
     func delete(_ tunnel: Tunnel) async throws {
+        // A connected tailnet signs out first, so its node key stops working at the server, not
+        // just on this Mac (security-9-astra S9-5, security-7 L3). Best effort: a tailnet that
+        // isn't connected can't reach its server, and its keys still go with the extension's copy.
+        if tunnel.isTailnet, tunnel.status == .connected, tunnel.tailnetStatus?.state == "Running" {
+            do { try await tailnetLogout(tunnel) } catch {
+                log.error("Could not sign \(tunnel.name, privacy: .public) out before deleting it: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         if tunnel.isActive { tunnel.manager.connection.stopVPNTunnel() }
         let reference = tunnel.proto?.passwordReference
         try await tunnel.manager.removeFromPreferences()
@@ -649,6 +758,8 @@ final class TunnelStore: ObservableObject {
     /// A copy under a new name (same keys): handy for variants such as split vs full tunnel.
     @discardableResult
     func duplicate(_ tunnel: Tunnel) async throws -> Tunnel {
+        // A copy of a tailnet would be a second node that signs in again: not in the spike.
+        guard !tunnel.isTailnet else { throw StoreError.invalid("Tailnets can't be duplicated yet; add another one") }
         guard let reference = tunnel.proto?.passwordReference else { throw StoreError.invalid("The keychain item is missing") }
         return try await add(name: "\(tunnel.name) copy", text: try ConfigKeychain.read(reference))
     }
@@ -742,7 +853,7 @@ final class TunnelStore: ObservableObject {
         // Make sure the extension starts from the current configuration. If it isn't running,
         // this start launches it, and it waits for the hand-off below (StartOption.awaitHandOff).
         let wakesExtension: Bool
-        switch await ExtensionSecrets.has(.wireGuard, id: tunnel.id, revision: Self.revision(tunnel)) {
+        switch await ExtensionSecrets.has(tunnel.engine, id: tunnel.id, revision: Self.revision(tunnel)) {
         case .notRunning:
             wakesExtension = true
             options[StartOption.awaitHandOff] = true as NSNumber
@@ -846,11 +957,11 @@ final class TunnelStore: ObservableObject {
     }
 
     /// Sends the tunnel's current configuration from the keychain to the extension.
-    private func handOff(_ tunnel: Tunnel) async throws {
+    private func handOff(_ tunnel: Tunnel, retryInterruptions: Bool = true) async throws {
         guard let reference = tunnel.proto?.passwordReference, let text = try? ConfigKeychain.read(reference) else {
             throw StoreError.invalid("The keychain item for this tunnel is missing; delete and re-import it")
         }
-        try await ExtensionSecrets.store(tunnel.engine, id: tunnel.id, text: text, revision: Self.revision(tunnel))
+        try await ExtensionSecrets.store(tunnel.engine, id: tunnel.id, text: text, revision: Self.revision(tunnel), retryInterruptions: retryInterruptions)
         pendingHandOff.remove(tunnel.id)
         log.notice("Handed \(tunnel.name, privacy: .public) to the extension")
     }
@@ -859,8 +970,9 @@ final class TunnelStore: ObservableObject {
     /// 10 s; the app a little longer, so its "didn't start" never comes before the extension's
     /// own reason), then catch up on anything else that was waiting.
     private func handOffAfterLaunch(_ tunnel: Tunnel, start: (count: Int, at: Date), session: AnyConnectSession? = nil, revision: String? = nil) async {
-        let outcome = await LaunchHandOff.run(attempts: 48, interval: .milliseconds(250), deliver: {
-            try await handOff(tunnel)
+        // Its own retries only, within 12 s of wall clock (security-8 L2).
+        let outcome = await LaunchHandOff.run(attempts: 48, interval: .milliseconds(250), deadline: .seconds(12), deliver: {
+            try await handOff(tunnel, retryInterruptions: false)
             // The revision the session was signed for, not whatever is current now (S5D-M1):
             // if the profile was edited meanwhile, the extension refuses the mismatch.
             // Not after a disconnect: the stop already ran, and nothing would drop the session.
@@ -962,6 +1074,9 @@ final class TunnelStore: ObservableObject {
         if tunnel.isOpenConnect && settings.enabled {
             throw StoreError.invalid("AnyConnect VPNs can't connect on demand: each connect needs a sign-in")
         }
+        if tunnel.isTailnet && settings.enabled {
+            throw StoreError.invalid("Tailnets can't connect on demand yet")
+        }
         try await tunnel.manager.loadFromPreferences()
         tunnel.manager.onDemandRules = settings.neRules()
         Self.setOnDemandEnabled(tunnel.manager, settings.enabled)
@@ -982,6 +1097,11 @@ final class TunnelStore: ObservableObject {
     /// Without it, allowing the local network needs `enforceRoutes` (see
     /// `canAllowLANWithoutKillSwitch`), and only then: other tunnels keep the plain routing table.
     func setProtection(_ tunnel: Tunnel, _ protection: Control.Protection) async throws {
+        // A tailnet is an overlay with no default route: the kill switch would cut the Mac off
+        // (spike design 2.6; with exit nodes, later, it gets WireGuard's full-tunnel defaults).
+        if tunnel.isTailnet && protection.killSwitch {
+            throw StoreError.invalid("Tailnets don't have a kill switch yet")
+        }
         try await tunnel.manager.loadFromPreferences()
         guard let proto = tunnel.proto else { return }
         proto.includeAllNetworks = protection.killSwitch
@@ -999,7 +1119,13 @@ final class TunnelStore: ObservableObject {
         #endif
         guard tunnel.status == .connected || tunnel.status == .reasserting,
               let session = tunnel.manager.connection as? NETunnelProviderSession,
-              let reply = await send(tunnel.isOpenConnect ? .openConnectStatus : .runtimeConfiguration, to: session) else { return nil }
+              let reply = await send(tunnel.isTailnet ? .tailnetStatus : tunnel.isOpenConnect ? .openConnectStatus : .runtimeConfiguration, to: session) else { return nil }
+        if tunnel.isTailnet {
+            // Status, not counters: the tailnet card shows peers and the sign-in state.
+            let status = TailnetStatus.decode(reply)
+            if status != tunnel.tailnetStatus { tunnel.tailnetStatus = status }
+            return nil
+        }
         let stats: RuntimeStats
         if tunnel.isOpenConnect {
             guard let status = try? JSONDecoder().decode(OpenConnectStatus.self, from: reply) else { return nil }

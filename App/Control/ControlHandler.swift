@@ -168,6 +168,14 @@ final class ControlHandler {
             }
 
         case .export:
+            // A tailnet's profile is its server and options; the node's keys never leave the
+            // Tailnet extension.
+            if let name = request.name, let t = store.tunnel(named: name), t.isTailnet {
+                guard let profile = t.tailnetProfile else { return .failure("The keychain item for \(t.name) is missing") }
+                var r = Control.Response(ok: true)
+                r.config = TailnetFile.serialize(profile)
+                return r
+            }
             if let name = request.name, let t = store.tunnel(named: name), t.isOpenConnect {
                 guard let profile = t.profile else { return .failure("The keychain item for \(t.name) is missing") }
                 var r = Control.Response(ok: true)
@@ -209,6 +217,11 @@ final class ControlHandler {
         case .onDemand, .protection:
             guard let name = request.name, let t = store.tunnel(named: name) else {
                 return .failure("No tunnel named \"\(request.name ?? "")\"")
+            }
+            // Refused before any approval prompt: the tailnet preview has no on-demand and no kill
+            // switch (it routes only tailnet space).
+            if t.isTailnet {
+                return .failure("Tailnets don't have on-demand or kill-switch settings yet")
             }
             do {
                 if request.command == .onDemand {
@@ -286,13 +299,15 @@ final class ControlHandler {
             name: t.name,
             status: t.cliStatus,
             onDemand: t.isOnDemand,
-            endpoint: t.isOpenConnect ? t.profile?.displayServer : t.configuration?.peers.first?.endpoint?.description,
-            addresses: t.isOpenConnect ? [t.stats?.openConnect?.ipv4, t.stats?.openConnect?.ipv6].compactMap { $0 }
+            endpoint: t.isTailnet ? t.tailnetProfile?.displayServer
+                : t.isOpenConnect ? t.profile?.displayServer : t.configuration?.peers.first?.endpoint?.description,
+            addresses: t.isTailnet ? t.tailnetStatus?.`self`?.addresses ?? []
+                : t.isOpenConnect ? [t.stats?.openConnect?.ipv4, t.stats?.openConnect?.ipv6].compactMap { $0 }
                 : t.configuration?.interface.addresses.map(\.description) ?? [],
             connectedSince: t.connectedSince)
         s.onDemandRules = Control.OnDemand(manager: t.manager)
         s.protection = Control.Protection(proto: t.proto)
-        s.protocol = t.isOpenConnect ? "anyconnect" : t.configuration?.protocolName
+        s.protocol = t.isTailnet ? "tailnet" : t.isOpenConnect ? "anyconnect" : t.configuration?.protocolName
         return s
     }
 

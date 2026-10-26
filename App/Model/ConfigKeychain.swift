@@ -19,10 +19,10 @@ enum ConfigKeychain {
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: AppIdentity.keychainService,
             kSecAttrAccount: "\(tunnelID.uuidString)/\(UUID().uuidString)",
-            kSecAttrLabel: kind == .openConnect ? "Wombat VPN: \(name)" : "Wombat tunnel: \(name)",
+            kSecAttrLabel: kind == .wireGuard ? "Wombat tunnel: \(name)" : "Wombat VPN: \(name)",
             // An AnyConnect profile holds no secret (server, group, username, certificate
             // fingerprints); it lives here anyway so both kinds are handled the same way.
-            kSecAttrDescription: kind == .openConnect ? "AnyConnect profile" : "wg-quick(8) configuration",
+            kSecAttrDescription: kind == .openConnect ? "AnyConnect profile" : kind == .tailnet ? "Tailnet profile" : "wg-quick(8) configuration",
             kSecAttrSynchronizable: false,
             kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecValueData: Data(text.utf8),

@@ -137,7 +137,8 @@ if [[ $dry_run -eq 0 ]]; then
     # work.anyconnect, client.p12 or CLAUDE.md in a source folder would ship (review NEW-5).
     # build-signed.sh also checks the finished bundle against a list of expected files.
     ignored=$(git ls-files --others --ignored --exclude-standard -- \
-        App Shared Resources completions Tunnel ExtensionShared OpenConnect CLI Vendor/WireGuardKit/Sources Packages/TunnelCore/Sources)
+        App Shared Resources completions Tunnel ExtensionShared OpenConnect Tailnet CLI Vendor/WireGuardKit/Sources \
+        Vendor/tailscale-bridge/licenses Packages/TunnelCore/Sources)
     stray=""
     while IFS= read -r f; do
         [[ -z "$f" || "$(basename "$f")" == .DS_Store ]] || stray+="$f"$'\n'

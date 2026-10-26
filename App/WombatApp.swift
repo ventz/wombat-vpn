@@ -55,6 +55,8 @@ final class AppModel: ObservableObject {
     let installer = ExtensionInstaller()
     /// Activated only once there is an AnyConnect VPN (TunnelStore.needsOpenConnect).
     let openConnectInstaller = OpenConnectInstaller()
+    /// Activated only once there is a tailnet (TunnelStore.needsTailnet).
+    let tailnetInstaller = TailnetInstaller()
     @Published var pendingImport: [ImportCandidate] = []
     /// True while dropped, chosen or pasted files are being read or decoded, before the review
     /// opens: nothing else may fill the review in that gap (review NEW-2).
@@ -195,13 +197,15 @@ final class AppModel: ObservableObject {
         // configurations it's missing.
         // Each publisher deduplicated on its own: merged first, the second extension's .active
         // could be dropped as a "duplicate" of the first's (Q5-L2).
-        installerObserver = installer.$state.removeDuplicates().merge(with: openConnectInstaller.$state.removeDuplicates())
+        installerObserver = installer.$state.removeDuplicates()
+            .merge(with: openConnectInstaller.$state.removeDuplicates(), tailnetInstaller.$state.removeDuplicates())
             .filter { $0 == .active }
             .sink { [weak self] _ in
                 guard let self else { return }
                 Task { await self.store.reload(); await self.store.syncToExtension() }
             }
         store.needsOpenConnect = { [weak self] in self?.openConnectInstaller.activateIfNeeded() }
+        store.needsTailnet = { [weak self] in self?.tailnetInstaller.activateIfNeeded() }
         store.openConnectBlocker = { [weak self] in
             guard let installer = self?.openConnectInstaller else { return nil }
             // A request already approved answers within moments.
@@ -495,9 +499,9 @@ struct AppCommands: Commands {
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(model.selectedTunnel == nil)
             Button("Export All Tunnels to Zip…") { model.runAll { try await Exporter.exportAll($0) } }
-                .disabled(!model.store.tunnels.contains { !$0.isOpenConnect })  // WireGuard tunnels only
+                .disabled(!model.store.tunnels.contains { $0.kind == .wireGuard })  // WireGuard tunnels only
             Button("Show QR Code…") { model.showingQR = true }
-                .disabled(model.selectedTunnel == nil || model.selectedTunnel?.isOpenConnect == true)
+                .disabled(model.selectedTunnel.map { $0.kind != .wireGuard } ?? true)
             Button("Duplicate Tunnel") { model.run { tunnel in model.selection = try await model.store.duplicate(tunnel).id } }
                 .keyboardShortcut("d")
                 .disabled(model.selectedTunnel == nil)

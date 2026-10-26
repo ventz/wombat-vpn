@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Wombat: WireGuard and Cisco AnyConnect for macOS</title>
-<meta name="description" content="WireGuard and Cisco AnyConnect in one native, free and open-source Mac app: the last VPN software you need. Built security-first: SwiftUI app, Apple Network Extension, kill switch, on-demand, AmneziaWG, SAML/Duo/certificate sign-in, and a full command line for developers.">
+<title>Wombat: WireGuard, AnyConnect and Tailscale for macOS</title>
+<meta name="description" content="WireGuard, Cisco AnyConnect and Tailscale in one native, free and open-source Mac app: the last VPN software you need. Built security-first: SwiftUI app, Apple Network Extension, kill switch, on-demand, AmneziaWG, SAML/Duo/certificate sign-in, tailnets with Headscale, and a full command line for developers.">
 <link rel="icon" href="/icon.png" type="image/png">
 <link rel="apple-touch-icon" href="/icon.png">
 <link rel="canonical" href="https://wombat.vpetkov.net/">
@@ -13,7 +13,7 @@
 <meta property="og:site_name" content="Wombat">
 <meta property="og:url" content="https://wombat.vpetkov.net/">
 <meta property="og:title" content="Wombat: WireGuard and Cisco AnyConnect for Mac">
-<meta property="og:description" content="The last VPN software you need: WireGuard, AmneziaWG and Cisco AnyConnect in one native, free and open-source Mac app. Security first, with a real command line.">
+<meta property="og:description" content="The last VPN software you need: WireGuard, AmneziaWG, Cisco AnyConnect and Tailscale in one native, free and open-source Mac app. Security first, with a real command line.">
 <meta property="og:image" content="https://wombat.vpetkov.net/og.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
@@ -21,7 +21,7 @@
 <meta property="og:image:alt" content="Wombat's app icon and main window, with the tagline: WireGuard and Cisco AnyConnect for Mac, the last VPN software you need">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Wombat: WireGuard and Cisco AnyConnect for Mac">
-<meta name="twitter:description" content="WireGuard, AmneziaWG and Cisco AnyConnect in one native, free and open-source Mac app. Security first.">
+<meta name="twitter:description" content="WireGuard, AmneziaWG, Cisco AnyConnect and Tailscale in one native, free and open-source Mac app. Security first.">
 <meta name="twitter:image" content="https://wombat.vpetkov.net/og.png">
 <meta name="twitter:image:alt" content="Wombat's app icon and main window, with the tagline: WireGuard and Cisco AnyConnect for Mac, the last VPN software you need">
 <style>
@@ -320,7 +320,7 @@
     <img class="icon" src="/icon.png" alt="" width="132" height="132" onerror="this.remove()">
     <h1>Wombat</h1>
     <p class="tagline-lead">
-      WireGuard®, AmneziaWG and Cisco AnyConnect in one app: the last VPN software you need.
+      WireGuard®, AmneziaWG, Cisco AnyConnect and Tailscale in one app: the last VPN software you need.
     </p>
     <p class="tagline">
       A <strong>native</strong>, <strong>free</strong> and <strong>open-source</strong> VPN
@@ -557,7 +557,44 @@ peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
 
   <hr class="rule">
 
-  <p class="eyebrow">5 &middot; Accessible</p>
+  <p class="eyebrow">5 &middot; Tailscale <span class="badge">Preview</span></p>
+  <h2>Your tailnet, without another app</h2>
+  <p class="lead">
+    Wombat joins Tailscale tailnets, and tailnets run by
+    <a href="https://headscale.net/">Headscale</a>, your own open-source coordination server.
+    Sign in once in your browser, and your devices are reachable by their tailnet address and
+    their MagicDNS name. New in 1.4 as a preview: the essentials work, and more is coming.
+  </p>
+  <ul class="features subhead">
+    <li>
+      <h3>Tailscale or your own server</h3>
+      <span>Use Tailscale's coordination server, or point Wombat at a Headscale on your own https address. Each server gets its own node and its own keys; keys never move between servers.</span>
+    </li>
+    <li>
+      <h3>Sign in your way</h3>
+      <span>Sign-in opens in your default browser, so your identity provider, passkeys and password manager just work. The page opens only when you click, and only on your coordination server's own address.</span>
+    </li>
+    <li>
+      <h3>MagicDNS, kept to your tailnet</h3>
+      <span>Names like <code>nas.your-tailnet.ts.net</code> resolve through the tailnet; everything else stays on your Mac's own DNS. A server can't claim domains that aren't the tailnet's, and once a tailnet has a DNS name it can't quietly switch to another.</span>
+    </li>
+    <li>
+      <h3>Only tailnet traffic</h3>
+      <span>Wombat checks everything the coordination server proposes before macOS sees it: tailnet addresses and routes only, never a default route, never another network's DNS. Tailnet Lock is kept on disk, so a compromised server can't switch it off.</span>
+    </li>
+    <li>
+      <h3>Its own sandbox</h3>
+      <span>Tailscale's engine runs in a third system extension, apart from your WireGuard keys and from AnyConnect, as root-only state that never leaves it. Its SSH, Taildrop, web and debug servers are compiled out, and it can't start other programs.</span>
+    </li>
+    <li>
+      <h3>What the preview leaves out</h3>
+      <span>Exit nodes, subnet routes, on-demand and command-line control come later. macOS runs one VPN at a time, so connecting a tailnet switches off your other tunnel, as with any VPN app.</span>
+    </li>
+  </ul>
+
+  <hr class="rule">
+
+  <p class="eyebrow">6 &middot; Accessible</p>
   <h2>Built for everyone</h2>
   <p class="lead">
     A VPN is something you need to trust at a glance. Wombat's interface is audited against WCAG 2.2 AA
@@ -592,7 +629,8 @@ peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
 
   <p class="callout">
     <strong>Free and open source under the MIT license.</strong> Built on wireguard-go and
-    WireGuardKit, with amneziawg-go for AmneziaWG tunnels and OpenConnect (LGPL) for AnyConnect.
+    WireGuardKit, with amneziawg-go for AmneziaWG tunnels, OpenConnect (LGPL) for AnyConnect, and
+    Tailscale's open-source client (BSD) for tailnets.
   </p>
 
 </main>
@@ -605,6 +643,7 @@ peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
       <a href="https://www.wireguard.com/">wireguard.com</a>
       Cisco, AnyConnect and Cisco Secure Client are trademarks of Cisco Systems, Inc.; Wombat is not
       affiliated with or endorsed by Cisco.
+      Tailscale is a trademark of Tailscale Inc.; Wombat is not affiliated with or endorsed by Tailscale.
     </p>
   </footer>
 </div>

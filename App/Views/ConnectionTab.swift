@@ -15,6 +15,22 @@ struct ConnectionTab: View {
     @State private var applying = false
 
     var body: some View {
+        if tunnel.isTailnet {
+            // Spike: a tailnet has no on-demand or kill switch yet (both refused by the store).
+            Form {
+                Section {
+                    Text("A tailnet connects only when you connect it from Wombat, the menu bar or `wombat up`. It carries tailnet addresses only, so there is no kill switch.")
+                } header: {
+                    Text("Connection")
+                }
+            }
+            .formStyle(.grouped)
+        } else {
+            settingsForm
+        }
+    }
+
+    private var settingsForm: some View {
         Form {
             if tunnel.isOpenConnect {
                 Section {

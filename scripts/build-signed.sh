@@ -17,6 +17,7 @@
 # certificate in the login keychain, and the notarytool profile (WOMBAT_NOTARY_PROFILE).
 
 set -euo pipefail
+export LC_ALL=C  # the bundle and import checks use bracket ranges
 trap 'echo "build-signed.sh: line $LINENO failed (exit $?): $BASH_COMMAND" >&2' ERR
 
 readonly IDENTITY="${WOMBAT_SIGNING_IDENTITY:-Developer ID Application: Ventzislav Petkov (8J9W3ZG4ZN)}"
@@ -70,10 +71,11 @@ xcodebuild -exportArchive -archivePath "$archive" -exportPath "$out/export" \
 say "Auditing signatures"
 # Outputs are read into variables, never piped to grep -q: under pipefail an early grep exit
 # kills the writer with SIGPIPE and a passing check fails at random (see Moo's release.sh).
-# Two system extensions: WireGuard (.tunnel) and OpenConnect (.openconnect), each its own process.
+# Three system extensions: WireGuard (.tunnel), OpenConnect (.openconnect) and Tailnet (.tailscale),
+# each its own process.
 extensions=()
 while IFS= read -r ext; do extensions+=("$ext"); done < <(ls -d "$app/Contents/Library/SystemExtensions/"*.systemextension)
-[[ ${#extensions[@]} -eq 2 ]] || { echo "expected 2 system extensions, found ${#extensions[@]}" >&2; exit 1; }
+[[ ${#extensions[@]} -eq 3 ]] || { echo "expected 3 system extensions, found ${#extensions[@]}" >&2; exit 1; }
 for code in "$app" "${extensions[@]}" "$app/Contents/Helpers/wombat"; do
     signature=$(codesign -dvv "$code" 2>&1)
     [[ "$signature" == *"Authority=Developer ID Application"* ]] \
@@ -89,6 +91,12 @@ for code in "$app" "${extensions[@]}"; do
     entitlements=$(codesign -d --entitlements - --xml "$code" 2>/dev/null)
     [[ "$entitlements" == *packet-tunnel-provider-systemextension* ]] \
         || { echo "missing packet-tunnel-provider-systemextension: $code" >&2; exit 1; }
+    # The Tailnet engine binds magicsock's UDP sockets: without network.server it dies about
+    # 20 ms into every start (device test 2026-10-26; quality-9 L8).
+    if [[ "$code" == *.tailscale.systemextension ]]; then
+        [[ "$entitlements" == *com.apple.security.network.server* && "$entitlements" == *com.apple.security.network.client* ]] \
+            || { echo "the Tailnet extension lacks network.server or network.client: $code" >&2; exit 1; }
+    fi
 done
 # Sparkle's nested code (Autoupdate, Updater.app, its XPC services) must be Developer ID signed
 # with the hardened runtime too: --deep --strict ignores a bare executable like Autoupdate, and
@@ -119,7 +127,7 @@ for ext in "${extensions[@]}"; do
     while IFS= read -r symbol; do
         case "$symbol" in
             _posix_spawn_file_actions_*|_posix_spawnattr_*) ;;  # building blocks only, harmless alone
-            _fork|_fork\$*|_vfork*|_exec*|_posix_spawn*|_system|_system\$*|_popen*|*OBJC_CLASS_\$_NSTask*)
+            _fork|_fork\$*|_vfork*|_forkpty*|_daemon|_daemon\$*|_wordexp*|_exec*|_posix_spawn*|_system|_system\$*|_popen*|_SMJobSubmit|_AuthorizationExecuteWithPrivileges|_LSOpen*|*OBJC_CLASS_\$_NSTask*|*OBJC_CLASS_\$_NSWorkspace*)
                 echo "the OpenConnect extension imports $symbol: $binary" >&2; exit 1 ;;
         esac
     done <<< "$imports"
@@ -134,10 +142,45 @@ for ext in "${extensions[@]}"; do
         [[ "$marks" == *"$mark"* ]] || { echo "libopenconnect in $binary lacks the patch message: $mark" >&2; exit 1; }
     done
 done
+# The Tailnet extension never starts processes either: its Go runtime is built with
+# os.StartProcess stubbed (scripts/lib-go-runtime.sh), Tailscale's log upload is compiled out
+# (ts_omit_logtail), and the clock is mach_continuous_time. The one exec-family import allowed
+# is execve: Go's syscall package keeps it through its execveLibc variable even though
+# syscall.Exec and forkExec, its only callers, aren't linked (build-ts-go.sh refuses an archive
+# that links them). Any other exec-family import fails the build.
+for ext in "${extensions[@]}"; do
+    [[ "$ext" == *.tailscale.systemextension ]] || continue
+    binary="$ext/Contents/MacOS/$(basename "$ext" .systemextension)"
+    [[ -x "$binary" ]] || { echo "no Tailnet extension binary at $binary" >&2; exit 1; }
+    imports=$(nm -u "$binary")
+    # All of them, as for OpenConnect: a truncated listing must not pass the exec gate below.
+    [[ "$imports" == *_getaddrinfo* && "$imports" == *_socket* ]] \
+        || { echo "unexpected import list for $binary" >&2; exit 1; }
+    while IFS= read -r symbol; do
+        case "$symbol" in
+            _execve) ;;
+            _posix_spawn_file_actions_*|_posix_spawnattr_*) ;;
+            _fork|_fork\$*|_vfork*|_forkpty*|_daemon|_daemon\$*|_wordexp*|_exec*|_posix_spawn*|_system|_system\$*|_popen*|_SMJobSubmit|_AuthorizationExecuteWithPrivileges|_LSOpen*|*OBJC_CLASS_\$_NSTask*|*OBJC_CLASS_\$_NSWorkspace*)
+                echo "the Tailnet extension imports $symbol: $binary" >&2; exit 1 ;;
+        esac
+    done <<< "$imports"
+    marks=$(strings "$binary")
+    [[ "$marks" == *"wombat: this process never runs programs"* ]] || { echo "the Tailnet extension lacks the exec stub: $binary" >&2; exit 1; }
+    # The signed binary is stripped, so this looks for logtail's own text (in any build that
+    # links its uploader, on both architectures), never the host name: net/tlsdial names
+    # log.tailscale.com in every build (build-ts-go.sh has the symbol check).
+    [[ "$marks" != *TS_DEBUG_LOGTAIL_FLUSHDELAY* ]] || { echo "the Tailnet extension links Tailscale's log upload: $binary" >&2; exit 1; }
+    symbols=$(nm "$binary")
+    [[ "$symbols" == *mach_continuous_time* && "$symbols" != *mach_absolute_time* ]] \
+        || { echo "the Tailnet extension's Go runtime isn't the patched one: $binary" >&2; exit 1; }
+    for license in LICENSE.tailscale LICENSE.wireguard-go LICENSE.gvisor; do
+        [[ -s "$ext/Contents/Resources/$license" ]] || { echo "missing $license in $ext" >&2; exit 1; }
+    done
+done
 for code in "$app" "${extensions[@]}" "$app/Contents/Helpers/wombat"; do
     codesign --verify -R="$DEVELOPER_ID_REQ" "$code" || { echo "does not satisfy the Developer ID requirement: $code" >&2; exit 1; }
 done
-echo "app, both extensions and CLI: Developer ID, hardened runtime, no get-task-allow or runtime exceptions, NE entitlement for system extensions"
+echo "app, all three extensions and CLI: Developer ID, hardened runtime, no get-task-allow or runtime exceptions, NE entitlement for system extensions"
 
 say "Checking bundle contents"
 # XcodeGen copies every file in a source folder into the bundle, gitignored ones included, so a
@@ -154,6 +197,9 @@ for ext in "${extensions[@]}"; do
     allowed+=$'\n'"$base/Info.plist"$'\n'"$base/embedded.provisionprofile"$'\n'"$base/_CodeSignature/CodeResources"$'\n'"$base/MacOS/${name%.systemextension}"
     if [[ "$name" == *.openconnect.systemextension ]]; then
         allowed+=$'\n'"$base/Resources/COPYING.LGPL"$'\n'"$base/Resources/LICENSE.openssl"
+    fi
+    if [[ "$name" == *.tailscale.systemextension ]]; then
+        allowed+=$'\n'"$base/Resources/LICENSE.tailscale"$'\n'"$base/Resources/LICENSE.wireguard-go"$'\n'"$base/Resources/LICENSE.gvisor"
     fi
 done
 while IFS= read -r f; do

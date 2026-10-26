@@ -34,6 +34,7 @@ enum CodeSigning {
     static var app: String { requirement(identifier: AppIdentity.appBundleID) }
     static var tunnelExtension: String { requirement(identifier: AppIdentity.extensionBundleID) }
     static var openConnectExtension: String { requirement(identifier: AppIdentity.openConnectExtensionBundleID) }
+    static var tailnetExtension: String { requirement(identifier: AppIdentity.tailnetExtensionBundleID) }
     static var cli: String { requirement(identifier: AppIdentity.appBundleID + ".cli") }
 }
 
@@ -66,4 +67,5 @@ extension AppIdentity {
     /// sandboxed app may look it up.
     static var extensionMachService: String { appGroup + ".tunnel" }
     static var openConnectMachService: String { appGroup + ".openconnect" }
+    static var tailnetMachService: String { appGroup + ".tailscale" }
 }

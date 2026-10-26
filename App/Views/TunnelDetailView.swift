@@ -173,9 +173,13 @@ struct TunnelActionItems: View {
             Button("Edit VPN…") { select(); model.anyConnectEditor = AnyConnectEditorTarget(tunnelID: tunnel.id) }
         }
         Button("Rename…") { select(); model.renameSelected() }
-        Button("Duplicate") { select(); model.run { model.selection = try await store.duplicate($0).id } }
+        if !tunnel.isTailnet {
+            Button("Duplicate") { select(); model.run { model.selection = try await store.duplicate($0).id } }
+        }
         Divider()
-        if tunnel.isOpenConnect {
+        if tunnel.isTailnet {
+            // Spike: no export or duplicate yet (a copy would be a second node).
+        } else if tunnel.isOpenConnect {
             Button("Export Profile…") { select(); model.run { try await Exporter.exportOne($0) } }
             // The identity provider's "remember me" cookies for this VPN's single sign-on.
             Button("Forget Sign-In Data") {
@@ -223,7 +227,14 @@ struct OverviewTab: View {
         ScrollViewReader { scroller in
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if tunnel.isOpenConnect {
+                if tunnel.isTailnet {
+                    if let profile = tunnel.tailnetProfile {
+                        TailnetCards(tunnel: tunnel, profile: profile)
+                    } else {
+                        ContentUnavailableView("Profile unavailable", systemImage: "key.slash",
+                                               description: Text("The keychain item for this tailnet is missing. Delete it and add it again."))
+                    }
+                } else if tunnel.isOpenConnect {
                     if let profile = tunnel.profile {
                         if tunnel.status == .connected { TrafficCard(stats: tunnel.stats) }
                         AnyConnectCards(profile: profile, certificateName: tunnel.clientCertificateName,

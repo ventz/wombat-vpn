@@ -12,6 +12,10 @@ enum AppIdentity {
     /// The OpenConnect (Cisco AnyConnect) system extension: a separate process with its own
     /// sandbox, so the OpenConnect C code never shares memory with WireGuard keys.
     static var openConnectExtensionBundleID: String { appBundleID + ".openconnect" }
+    /// The tailnet (Tailscale/Headscale) system extension: a third process, so Tailscale's
+    /// control plane, DERP and peers never share memory with WireGuard keys (spike design).
+    /// The bundle id may name Tailscale; the display name may not (trademark).
+    static var tailnetExtensionBundleID: String { appBundleID + ".tailscale" }
     /// Unified logging subsystem: `log stream --predicate 'subsystem == "net.vpetkov.wombat"'`.
     static var logSubsystem: String { appBundleID }
     /// Keychain service for tunnel configurations (one generic password per tunnel).
@@ -31,6 +35,13 @@ enum ProviderMessage: UInt8 {
     case recentLog = 1
     /// OpenConnect extension only. Reply: `OpenConnectStatus` as JSON (no secrets).
     case openConnectStatus = 2
+    /// Tailnet extension only. Reply: `TailnetStatus` as JSON (no keys).
+    case tailnetStatus = 3
+    /// Tailnet extension only: ask the coordination server for a sign-in page. Reply: empty on
+    /// success, else the error text. The page's URL then appears in `TailnetStatus`.
+    case tailnetLogin = 4
+    /// Tailnet extension only: sign out (the server expires the node key). Reply as for login.
+    case tailnetLogout = 5
 }
 
 /// providerConfiguration keys. Holds no secrets: /Library/Preferences/com.apple.networkextension.plist

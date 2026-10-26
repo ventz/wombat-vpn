@@ -9,6 +9,7 @@ struct ContentView: View {
     @EnvironmentObject private var installer: ExtensionInstaller
     @EnvironmentObject private var openConnectInstaller: OpenConnectInstaller
     @State private var showingNewTunnel = false
+    @State private var showingAddTailnet = false
     @State private var dropTargeted = false
 
     var body: some View {
@@ -25,6 +26,8 @@ struct ContentView: View {
                         // Only while an AnyConnect VPN exists: the extension is requested by the first
                         // one, and the banner must not stay after the last is deleted (user, 2026-10-16).
                         ExtensionBanner(installer: openConnectInstaller)
+                    } else if model.tailnetInstaller.needsAttention, store.tunnels.contains(where: \.isTailnet) {
+                        ExtensionBanner(installer: model.tailnetInstaller)
                     } else if let problem = store.extensionProblem {
                         ExtensionProblemBanner(message: problem)
                     }
@@ -42,6 +45,9 @@ struct ContentView: View {
                     Divider()
                     Button("New Empty Tunnel…") { showingNewTunnel = true }
                     Button("Add AnyConnect VPN…") { model.anyConnectEditor = AnyConnectEditorTarget(tunnelID: nil) }
+                    if TailnetPreview.enabled {
+                        Button("Add Tailnet (Preview)…") { showingAddTailnet = true }
+                    }
                 } label: {
                     Label("Add Tunnel", systemImage: "plus")
                 }
@@ -92,6 +98,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingNewTunnel) {
             NewTunnelSheet()
+        }
+        .sheet(isPresented: $showingAddTailnet) {
+            AddTailnetSheet()
         }
         .sheet(item: $model.anyConnectEditor) { target in
             AnyConnectEditor(tunnel: target.tunnelID.flatMap { id in store.tunnels.first { $0.id == id } })
@@ -425,19 +434,22 @@ struct ExtensionBanner: View {
 
     private var title: String {
         switch installer.state {
-        case .needsApproval: return installer.engineName == "OpenConnect" ? "Allow Wombat's OpenConnect extension" : "Allow the Wombat network extension"
+        case .needsApproval:
+            return isOpenConnect ? "Allow Wombat's OpenConnect extension" : isTailnet ? "Allow Wombat's Tailnet extension" : "Allow the Wombat network extension"
         case .requiresApplicationsFolder: return "Move Wombat to the Applications folder"
-        case .failed: return "The \(installer.engineName == "OpenConnect" ? "OpenConnect" : "network") extension could not be activated"
+        case .failed: return "The \(isOpenConnect ? "OpenConnect" : isTailnet ? "Tailnet" : "network") extension could not be activated"
         default: return ""
         }
     }
 
     private var isOpenConnect: Bool { installer.engineName == "OpenConnect" }
+    private var isTailnet: Bool { installer.engineName == "Tailnet" }
 
     private var detail: String {
         switch installer.state {
         case .needsApproval:
-            return isOpenConnect ? "AnyConnect VPNs run in a second extension, kept apart from your WireGuard keys." : ""
+            if isOpenConnect { return "AnyConnect VPNs run in a second extension, kept apart from your WireGuard keys." }
+            return isTailnet ? "Tailnets run in their own extension, kept apart from your WireGuard keys." : ""
         case .requiresApplicationsFolder:
             return "macOS only runs network extensions for apps in /Applications."
         case .failed(let message):
@@ -463,7 +475,7 @@ struct ExtensionBanner: View {
 
     private var footer: String {
         guard installer.state == .needsApproval else { return "" }
-        return "\(isOpenConnect ? "AnyConnect VPNs" : "Tunnels") can't connect until you do."
+        return "\(isOpenConnect ? "AnyConnect VPNs" : isTailnet ? "Tailnets" : "Tunnels") can't connect until you do."
     }
 }
 
@@ -493,9 +505,11 @@ struct ExtensionSwitchPreview: View {
     /// As System Settings shows them: the OpenConnect extension appears only once requested,
     /// and by then the WireGuard one ("Wombat Tunnel") is normally on already.
     private var rows: [String] {
-        highlight == AppIdentity.openConnectExtensionBundleID
-            ? [AppIdentity.extensionBundleID, AppIdentity.openConnectExtensionBundleID]
-            : [AppIdentity.extensionBundleID]
+        switch highlight {
+        case AppIdentity.openConnectExtensionBundleID: [AppIdentity.extensionBundleID, AppIdentity.openConnectExtensionBundleID]
+        case AppIdentity.tailnetExtensionBundleID: [AppIdentity.extensionBundleID, AppIdentity.tailnetExtensionBundleID]
+        default: [AppIdentity.extensionBundleID]
+        }
     }
 
     var body: some View {

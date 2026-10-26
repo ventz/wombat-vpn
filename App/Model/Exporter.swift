@@ -27,6 +27,7 @@ enum Exporter {
     }
 
     static func exportOne(_ tunnel: Tunnel) async throws {
+        if tunnel.isTailnet { throw Failure.canceled }  // spike: nothing to export yet
         if tunnel.isOpenConnect { return try exportProfile(tunnel) }
         guard await Authenticator.confirm(reason: "export “\(tunnel.name)” with its private key") else { throw Failure.canceled }
         let text = try fullText(tunnel)
@@ -52,7 +53,7 @@ enum Exporter {
     /// All WireGuard tunnels in one zip, in the layout the official app (and Wombat) imports.
     /// AnyConnect profiles are exported one by one.
     static func exportAll(_ all: [Tunnel]) async throws {
-        let tunnels = all.filter { !$0.isOpenConnect }
+        let tunnels = all.filter { $0.kind == .wireGuard }
         guard !tunnels.isEmpty else { return }
         guard await Authenticator.confirm(reason: "export all \(tunnels.count) tunnels with their private keys") else { throw Failure.canceled }
         let files = try tunnels.map { ZipWriter.File(name: $0.name, text: try fullText($0)) }

@@ -102,6 +102,12 @@ extension ExtensionInstaller: OSSystemExtensionRequestDelegate {
     }
 }
 
+/// The Tailnet extension's installer, activated only once a tailnet exists.
+@MainActor
+final class TailnetInstaller: ExtensionInstaller {
+    init() { super.init(identifier: AppIdentity.tailnetExtensionBundleID, engineName: "Tailnet") }
+}
+
 /// The OpenConnect extension's installer (its own type, so views can observe both).
 @MainActor
 final class OpenConnectInstaller: ExtensionInstaller {

@@ -6,7 +6,7 @@
 
 <h1>Wombat</h1>
 
-<p><strong>WireGuard®, AmneziaWG and Cisco AnyConnect in one app: the last VPN software you need.</strong></p>
+<p><strong>WireGuard®, AmneziaWG, Cisco AnyConnect and Tailscale in one app: the last VPN software you need.</strong></p>
 
 <p>
 A native, free and open-source VPN client for macOS. Secure first, easy and beautiful to use,
@@ -67,6 +67,9 @@ source ocserv), the VPN most universities and companies run, with sign-in by pas
 single sign-on (SAML: Okta, Entra ID, Duo SSO…) or a client certificate from your keychain. One
 app for your own WireGuard servers and your work or campus VPN, no Cisco client needed.
 
+New in 1.4, as a preview: Wombat joins **Tailscale** tailnets, including ones run by your own
+[Headscale](https://headscale.net/) server, with MagicDNS and browser sign-in.
+
 ## Quick Install
 
 1. Download **[Wombat.dmg](https://wombat.vpetkov.net/Wombat.dmg)** (always the latest version;
@@ -75,7 +78,8 @@ app for your own WireGuard servers and your work or campus VPN, no Cisco client 
 3. Open Wombat, then allow its network extension once: **System Settings › General › Login Items
    & Extensions** › **Extensions** › **By Category** › **ⓘ** next to **Network Extensions** ›
    under **Wombat.app**, turn on **Wombat Tunnel** › **Done**. Your first Cisco AnyConnect VPN
-   asks once more: turn on **Wombat OpenConnect** there too.
+   asks once more: turn on **Wombat OpenConnect** there too. Your first tailnet asks for
+   **Wombat Tailnet**.
 
 Or with [Homebrew](https://brew.sh), which also puts the `wombat` command on your `PATH`:
 
@@ -110,6 +114,11 @@ scripts/build-signed.sh --install
   [OpenConnect](https://www.infradead.org/openconnect/) with DTLS, in its own system extension.
   Profiles export as `.anyconnect` files to share with colleagues. See
   [docs/OPENCONNECT.md](docs/OPENCONNECT.md).
+- **Tailscale (preview):** join a Tailscale tailnet, or one run by your own Headscale, and reach
+  your devices by tailnet address and MagicDNS name. Sign-in opens in your browser, only on your
+  coordination server's own address. Wombat checks everything the server proposes before macOS
+  sees it: tailnet addresses and routes only, DNS only for the tailnet's own names. Runs
+  Tailscale's open-source client in its own system extension. See [docs/TAILSCALE.md](docs/TAILSCALE.md).
 - **QR codes:** scan a tunnel's QR code with the Mac's camera (or an iPhone as Continuity
   Camera), or import a screenshot or picture of one. Going the other way, Show QR Code puts a
   tunnel on your phone, after Touch ID.
@@ -208,6 +217,7 @@ vulnerability, see [SECURITY.md](SECURITY.md).
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, where secrets live, trust boundaries, leak protection |
 | [docs/OPENCONNECT.md](docs/OPENCONNECT.md) | Cisco AnyConnect: sign-in methods, profiles, what's supported, how it's isolated |
+| [docs/TAILSCALE.md](docs/TAILSCALE.md) | Tailscale and Headscale (preview): adding a tailnet, sign-in, MagicDNS, limits, how it's isolated |
 | [docs/CLI.md](docs/CLI.md) | Every `wombat` command, JSON output, exit codes, completion |
 | [docs/DEVELOPING.md](docs/DEVELOPING.md) | Building, signing, the test peer, debugging |
 
@@ -228,11 +238,15 @@ project with no promise of support.
   LGPL-2.1, © David Woodhouse and contributors) with [OpenSSL](https://www.openssl.org/) 3.5 LTS
   (Apache-2.0); see [Vendor/openconnect/WOMBAT.md](Vendor/openconnect/WOMBAT.md) for how they are
   built and relinked.
+- Tailnets run on [Tailscale's open-source client](https://github.com/tailscale/tailscale)
+  (BSD-3-Clause, © Tailscale Inc. and contributors), with gVisor (Apache-2.0); Wombat's patches
+  to it are applied by `scripts/build-ts-go.sh`.
 
 “WireGuard” and the “WireGuard” logo are registered trademarks of Jason A. Donenfeld. Wombat is
 not affiliated with or endorsed by the WireGuard project. See [wireguard.com](https://www.wireguard.com/).
 Cisco, AnyConnect and Cisco Secure Client are trademarks of Cisco Systems, Inc.; Wombat is not
-affiliated with or endorsed by Cisco.
+affiliated with or endorsed by Cisco. Tailscale is a trademark of Tailscale Inc.; Wombat is not
+affiliated with or endorsed by Tailscale.
 
 ## License
 

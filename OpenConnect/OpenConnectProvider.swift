@@ -259,8 +259,8 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
             completionHandler(Data(recentLog.lines().joined(separator: "\n").utf8))
         case .openConnectStatus:
             queue.async { completionHandler(try? JSONEncoder().encode(self.status())) }
-        case .runtimeConfiguration:
-            completionHandler(nil)  // WireGuard only
+        case .runtimeConfiguration, .tailnetStatus, .tailnetLogin, .tailnetLogout:
+            completionHandler(nil)  // the other extensions'
         }
     }
 
