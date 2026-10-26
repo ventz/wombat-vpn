@@ -269,6 +269,7 @@ struct SidebarRow: View {
     private var spokenStatus: String {
         if signingIn { return "Signing in, waiting for you" }
         if let error = tunnel.lastError { return "\(tunnel.statusText), error: \(error)" }
+        if tunnel.tailnetSubstate != nil { return tunnel.statusText }  // accessibility-9 H1
         if tunnel.status == .connected, let since = tunnel.connectedSince {
             return "Connected " + since.formatted(.relative(presentation: .named))
         }
@@ -280,6 +281,7 @@ struct SidebarRow: View {
     private var subtitle: String {
         if signingIn { return "Signing in…" }
         if let error = tunnel.lastError { return "Error: \(error)" }
+        if tunnel.tailnetSubstate != nil { return tunnel.statusText }  // accessibility-9 H1
         if tunnel.status == .connected, let since = tunnel.connectedSince {
             return "Connected · " + since.formatted(.relative(presentation: .named))
         }

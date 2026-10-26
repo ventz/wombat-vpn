@@ -21,9 +21,10 @@ The items under [What the preview leaves out](#what-the-preview-leaves-out) come
 
 ## Adding a tailnet
 
-**+** › **Add Tailnet (Preview)…**. Leave **Coordination server** empty for Tailscale's own
-server, or enter your Headscale's address (`https://headscale.example.com`). **Host name** is how
-this Mac appears in the tailnet; empty uses the Mac's name. The first tailnet asks you to allow
+**+** › **Add Tailnet (Preview)…**, then choose the coordination server: **Tailscale**, or **My
+own server (Headscale)** and its address (`headscale.example.com`; `https://` is assumed, a port
+is fine). **This Mac in the tailnet** is the name other devices see; empty uses the Mac's name.
+The first tailnet asks you to allow
 Wombat's third system extension once, in System Settings › General › Login Items & Extensions ›
 Network Extensions (ⓘ): turn on **Wombat Tailnet**.
 

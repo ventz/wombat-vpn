@@ -494,3 +494,8 @@ public struct TailnetCommandReply: Codable, Equatable, Sendable {
         return try? JSONDecoder().decode(TailnetCommandReply.self, from: data)
     }
 }
+
+extension TailnetStatus.Peer {
+    /// A stable list identity for the peer rows: its name and first address.
+    public var rowID: String { name + "|" + (addresses.first ?? "") }
+}

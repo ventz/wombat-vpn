@@ -189,13 +189,27 @@ final class Tunnel: ObservableObject, Identifiable {
 
     var statusText: String {
         switch status {
-        case .connected: return "Connected"
+        case .connected:
+            // A tailnet is up before it is signed in: "Connected" alone would hide the one thing
+            // the user has to do (accessibility-9 H1).
+            if let sub = tailnetSubstate { return "Connected, \(sub)" }
+            return "Connected"
         case .connecting: return "Connecting…"
         case .disconnecting: return "Disconnecting…"
         case .reasserting: return "Reconnecting…"
         case .disconnected: return "Disconnected"
         case .invalid: return "Invalid"
         @unknown default: return "Unknown"
+        }
+    }
+
+    /// What a connected tailnet still waits for, if anything.
+    var tailnetSubstate: String? {
+        guard isTailnet, status == .connected else { return nil }
+        switch tailnetStatus?.state {
+        case "NeedsLogin": return "needs sign-in"
+        case "NeedsMachineAuth": return "waiting for approval"
+        default: return nil
         }
     }
 
@@ -304,6 +318,23 @@ final class TunnelStore: ObservableObject {
             .priority: priority.rawValue,
         ])
         Preferences.postStatusNotification(text)
+    }
+
+    /// A tailnet's sign-in state changes while the tunnel stays connected, so announce() never
+    /// sees them (accessibility-9 H1).
+    private func announceTailnet(_ tunnel: Tunnel, state: String, from old: String?) {
+        let text: String
+        var priority = NSAccessibilityPriorityLevel.medium
+        switch state {
+        case "NeedsLogin": text = "\(tunnel.name): sign-in needed"; priority = .high
+        case "NeedsMachineAuth": text = "\(tunnel.name): waiting for an administrator to approve this Mac"
+        case "Running" where old == "NeedsLogin" || old == "NeedsMachineAuth": text = "\(tunnel.name): signed in"
+        default: return
+        }
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested, userInfo: [
+            .announcement: text,
+            .priority: priority.rawValue,
+        ])
     }
 
     /// Failures that happen before the status changes never reach announce(); say them too.
@@ -1123,7 +1154,9 @@ final class TunnelStore: ObservableObject {
         if tunnel.isTailnet {
             // Status, not counters: the tailnet card shows peers and the sign-in state.
             let status = TailnetStatus.decode(reply)
+            let old = tunnel.tailnetStatus?.state
             if status != tunnel.tailnetStatus { tunnel.tailnetStatus = status }
+            if let new = status?.state, new != old { announceTailnet(tunnel, state: new, from: old) }
             return nil
         }
         let stats: RuntimeStats

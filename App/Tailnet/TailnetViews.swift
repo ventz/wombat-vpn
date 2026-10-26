@@ -29,28 +29,32 @@ struct TailnetCards: View {
             if let health = status?.health, !health.isEmpty {
                 // These come from the tailnet engine and the coordination server, not from Wombat:
                 // a server's text must not pass for Wombat's own warning (security-9-astra S9-4).
-                Text("Reported by the tailnet").font(.caption).foregroundStyle(.secondary)
+                Text("Reported by the tailnet").font(.callout)
                 ForEach(health, id: \.self) { warning in
-                    Label(warning, systemImage: "info.circle").foregroundStyle(.secondary)
+                    Label { Text(warning) } icon: { Image(systemName: "info.circle").foregroundStyle(.secondary) }
                 }
             }
             signIn
         }
         if let status, !status.peers.isEmpty {
             Card(title: "Peers", systemImage: "desktopcomputer") {
-                ForEach(Array(status.peers.prefix(100).enumerated()), id: \.offset) { _, peer in
+                // Keyed by the peer's name and address, so a refresh doesn't move the VoiceOver
+                // cursor onto another peer (accessibility-9 M3).
+                ForEach(status.peers.prefix(100), id: \.rowID) { peer in
+                    let name = peer.dnsName?.split(separator: ".").first.map(String.init) ?? peer.name
+                    let path = peer.active ? (peer.direct ? "direct" : "relay \(peer.relay ?? "")") : nil
                     HStack(alignment: .firstTextBaseline) {
-                        Image(systemName: "circle.fill").font(.caption2)
-                            .foregroundStyle(peer.online ? .green : .secondary)
-                            .accessibilityLabel(peer.online ? "Online" : "Offline")
-                        Text(peer.dnsName?.split(separator: ".").first.map(String.init) ?? peer.name)
-                            .frame(width: 160, alignment: .leading)
+                        // Shape and word as well as color (accessibility-9 M2).
+                        Image(systemName: peer.online ? "circle.fill" : "circle").font(.caption2)
+                            .foregroundStyle(peer.online ? Color.green : Color.secondary)
+                        Text(name).frame(width: 160, alignment: .leading)
                         Text(peer.addresses.first ?? "").font(.body.monospaced()).textSelection(.enabled)
                         Spacer()
-                        if peer.active {
-                            Text(peer.direct ? "direct" : "relay \(peer.relay ?? "")").foregroundStyle(.secondary)
-                        }
+                        Text(path ?? (peer.online ? "online" : "offline")).foregroundStyle(.secondary)
                     }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(name)
+                    .accessibilityValue([peer.online ? "online" : "offline", peer.addresses.first, path].compactMap { $0 }.joined(separator: ", "))
                 }
                 if status.peers.count > 100 || status.peersTruncated == true {
                     Text("…and more peers").foregroundStyle(.secondary)
@@ -69,17 +73,19 @@ struct TailnetCards: View {
                         NSWorkspace.shared.open(url)
                     }
                 }
-                .keyboardShortcut(.defaultAction)
                 .disabled(busy)
-                Text("in your browser, at \(URL(string: profile.controlURL)?.host() ?? "the coordination server")").foregroundStyle(.secondary)
+                .accessibilityHint("Opens the sign-in page at \(signInHost) in your browser")
+                Text("in your browser, at \(signInHost)")
             }
             if openedSignIn {
-                Text("This goes away by itself once you have signed in.").font(.callout).foregroundStyle(.secondary)
+                Text("This goes away by itself once you have signed in.").font(.callout)
             }
         } else if status?.state == "Running" {
             Button("Sign Out") { run { try await store.tailnetLogout(tunnel) } }.disabled(busy)
         }
     }
+
+    private var signInHost: String { URL(string: profile.controlURL)?.host() ?? "the coordination server" }
 
     private func run(_ action: @escaping () async throws -> Void) {
         busy = true
@@ -110,52 +116,111 @@ enum TailnetPreview {
     static let enabled = true
 }
 
-/// Adds a tailnet from a coordination server URL (Tailscale's by default, or a Headscale).
+/// Adds a tailnet. The coordination server is an explicit choice, Tailscale's or your own
+/// (Headscale), never an empty field that means Tailscale (user, 2026-10-26: "super confusing").
 struct AddTailnetSheet: View {
     @EnvironmentObject private var store: TunnelStore
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var name = "Tailnet"
-    @State private var control = ""
+
+    enum Server: Hashable { case tailscale, own }
+    @State private var server: Server = .tailscale
+    @State private var address = ""
+    @State private var name = ""
     @State private var hostname = ""
     @State private var acceptDNS = true
     @State private var problem: String?
+    @State private var addressProblem: String?
+    @State private var saving = false
+    @FocusState private var addressFocused: Bool
 
     var body: some View {
-        Form {
-            Text("Add a Tailnet (preview)").font(.headline)
-            Text("Leave the server empty for Tailscale. After you connect, Sign In opens your coordination server's page in your browser.")
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Add Tailnet").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
+            Text("Joins a Tailscale network. Preview: tailnet addresses and MagicDNS work; exit nodes and subnet routes come later.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            TextField("Name", text: $name)
-            TextField("Coordination server", text: $control, prompt: Text("Empty for Tailscale, or https://headscale.example.com"))
-            TextField("Host name", text: $hostname, prompt: Text("Optional"))
-            Toggle("Use MagicDNS", isOn: $acceptDNS)
-            if let problem { Text(problem).foregroundStyle(.red) }
+            Form {
+                Picker("Coordination server", selection: $server) {
+                    Text("Tailscale").tag(Server.tailscale)
+                    Text("My own server (Headscale)").tag(Server.own)
+                }
+                .pickerStyle(.radioGroup)
+                if server == .own {
+                    TextField("Server address", text: $address, prompt: Text("headscale.example.com"))
+                        .textContentType(.URL)
+                        .focused($addressFocused)
+                        .accessibilityHint(addressProblem ?? "Your Headscale's https address; a port is allowed")
+                    if let addressProblem { ErrorLabel(addressProblem).font(.caption) }
+                    else if address.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Text("Enter your server's address.").font(.caption)
+                    }
+                }
+                TextField("Name", text: $name, prompt: Text(defaultName))
+                TextField("Host name for this Mac", text: $hostname, prompt: Text("Optional"))
+                    .help("How this Mac appears in the tailnet. Empty uses the Mac's own name.")
+                Toggle("Use MagicDNS (reach devices by name)", isOn: $acceptDNS)
+            }
+            .formStyle(.grouped)
+            Text("After you add it, connect, then click Sign In: the sign-in page opens in your browser.")
+                .font(.callout).fixedSize(horizontal: false, vertical: true)
+            if let problem { ErrorLabel(problem) }
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                Button("Add") { add() }.keyboardShortcut(.defaultAction)
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Add Tailnet") { add() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(saving || (server == .own && address.trimmingCharacters(in: .whitespaces).isEmpty))
             }
         }
         .padding(20)
-        .frame(width: 460)
+        .frame(width: 520)
+        .onChange(of: address) { problem = nil; addressProblem = nil }
+        .onChange(of: server) { problem = nil; addressProblem = nil; addressFocused = server == .own }
+    }
+
+    /// Errors are shown and spoken: focus stays on the Add button, so VoiceOver users would
+    /// otherwise not learn why nothing happened (accessibility-9 M1).
+    private func fail(_ message: String, address: Bool = false) {
+        if address { addressProblem = message } else { problem = message }
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested, userInfo: [
+            .announcement: "Couldn't add the tailnet: \(message)",
+            .priority: NSAccessibilityPriorityLevel.high.rawValue,
+        ])
+    }
+
+    private var defaultName: String {
+        guard server == .own else { return "Tailscale" }
+        return URL(string: Self.withScheme(address))?.host() ?? "Headscale"
+    }
+
+    /// "headscale.example.com" means https; anything else is checked as typed (http is refused).
+    static func withScheme(_ text: String) -> String {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        return t.isEmpty || t.contains("://") ? t : "https://" + t
     }
 
     private func add() {
         var profile = TailnetProfile(acceptDNS: acceptDNS)
-        switch TailnetControl.canonical(control.trimmingCharacters(in: .whitespaces)) {
-        case .success(let url): profile.controlURL = url
-        case .failure(let p): problem = p.message; return
+        if server == .own {
+            switch TailnetControl.canonical(Self.withScheme(address)) {
+            case .success(let url): profile.controlURL = url
+            case .failure(let p): fail(p.message, address: true); return
+            }
         }
-        profile.hostname = hostname.isEmpty ? nil : hostname
+        let host = hostname.trimmingCharacters(in: .whitespaces)
+        profile.hostname = host.isEmpty ? nil : host
         let text = TailnetFile.serialize(profile)
-        guard TailnetFile.parse(text).profile != nil else { problem = TailnetFile.parse(text).errors.map(\.description).joined(separator: "\n"); return }
+        let parsed = TailnetFile.parse(text)
+        guard parsed.profile != nil else { fail(parsed.errors.map(\.description).joined(separator: "\n")); return }
+        let chosen = name.trimmingCharacters(in: .whitespaces)
+        saving = true
         Task {
+            defer { saving = false }
             do {
-                model.selection = try await store.addTailnet(name: name, text: text).id
+                model.selection = try await store.addTailnet(name: chosen.isEmpty ? defaultName : chosen, text: text).id
                 dismiss()
             } catch {
-                problem = error.localizedDescription
+                fail(error.localizedDescription)
             }
         }
     }
