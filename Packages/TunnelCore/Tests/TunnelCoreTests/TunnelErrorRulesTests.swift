@@ -10,6 +10,21 @@ import Testing
     private let notRunning = "The network extension didn't start."
     private var extensionErrors: Set<String> { [notRunning, "The OpenConnect extension didn't start."] }
 
+    /// security-8 L2: a slow deliver (XPC retries) must not stretch the wait to attempts × its
+    /// duration; the deadline ends it.
+    @MainActor @Test func slowDeliveriesStopAtTheDeadline() async {
+        var tries = 0
+        let started = ContinuousClock.now
+        let outcome = await LaunchHandOff.run(attempts: 48, interval: .zero, deadline: .milliseconds(300), deliver: {
+            tries += 1
+            try await Task.sleep(for: .milliseconds(100))
+            throw Unreachable()
+        }, isUnreachable: { $0 is Unreachable }, isCurrent: { true }, tunnelIsUp: { false })
+        #expect(outcome == .extensionNotRunning)
+        #expect(tries <= 4)
+        #expect(ContinuousClock.now - started < .seconds(2))
+    }
+
     @MainActor @Test func unreachableExtensionWithTunnelUpIsNoError() async {
         var tries = 0
         let outcome = await LaunchHandOff.run(attempts: 36, interval: .zero, deliver: {

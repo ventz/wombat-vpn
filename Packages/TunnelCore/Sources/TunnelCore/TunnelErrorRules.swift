@@ -69,13 +69,18 @@ public enum LaunchHandOff {
         case superseded
     }
 
-    public static func run(attempts: Int, interval: Duration,
+    /// Gives up after `attempts` or once `deadline` has passed, whichever comes first: a slow
+    /// `deliver` must not stretch the wait past what the extension itself waits (security-8 L2).
+    public static func run(attempts: Int, interval: Duration, deadline: Duration? = nil,
                            isolation: isolated (any Actor)? = #isolation,
                            deliver: () async throws -> Void,
                            isUnreachable: (Error) -> Bool,
                            isCurrent: () -> Bool,
                            tunnelIsUp: () -> Bool) async -> Outcome {
+        let clock = ContinuousClock()
+        let end = deadline.map { clock.now + $0 }
         for _ in 0..<attempts {
+            if let end, clock.now >= end { break }
             try? await Task.sleep(for: interval)
             guard isCurrent() else { return .superseded }
             do {

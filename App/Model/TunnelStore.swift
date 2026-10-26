@@ -217,6 +217,9 @@ final class TunnelStore: ObservableObject {
     }
 
     init() {
+        // An extension that keeps dropping the connection is queued like one that isn't running,
+        // but shown (security-8 L1); an answer later clears it (syncPass).
+        ExtensionSecrets.onPersistentInterruption = { [weak self] message in self?.extensionProblem = message }
         statusObserver = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: .main) { [weak self] note in
             MainActor.assumeIsolated {
                 guard let self, let session = note.object as? NETunnelProviderSession,
@@ -846,11 +849,11 @@ final class TunnelStore: ObservableObject {
     }
 
     /// Sends the tunnel's current configuration from the keychain to the extension.
-    private func handOff(_ tunnel: Tunnel) async throws {
+    private func handOff(_ tunnel: Tunnel, retryInterruptions: Bool = true) async throws {
         guard let reference = tunnel.proto?.passwordReference, let text = try? ConfigKeychain.read(reference) else {
             throw StoreError.invalid("The keychain item for this tunnel is missing; delete and re-import it")
         }
-        try await ExtensionSecrets.store(tunnel.engine, id: tunnel.id, text: text, revision: Self.revision(tunnel))
+        try await ExtensionSecrets.store(tunnel.engine, id: tunnel.id, text: text, revision: Self.revision(tunnel), retryInterruptions: retryInterruptions)
         pendingHandOff.remove(tunnel.id)
         log.notice("Handed \(tunnel.name, privacy: .public) to the extension")
     }
@@ -859,8 +862,9 @@ final class TunnelStore: ObservableObject {
     /// 10 s; the app a little longer, so its "didn't start" never comes before the extension's
     /// own reason), then catch up on anything else that was waiting.
     private func handOffAfterLaunch(_ tunnel: Tunnel, start: (count: Int, at: Date), session: AnyConnectSession? = nil, revision: String? = nil) async {
-        let outcome = await LaunchHandOff.run(attempts: 48, interval: .milliseconds(250), deliver: {
-            try await handOff(tunnel)
+        // Its own retries only, within 12 s of wall clock (security-8 L2).
+        let outcome = await LaunchHandOff.run(attempts: 48, interval: .milliseconds(250), deadline: .seconds(12), deliver: {
+            try await handOff(tunnel, retryInterruptions: false)
             // The revision the session was signed for, not whatever is current now (S5D-M1):
             // if the profile was edited meanwhile, the extension refuses the mismatch.
             // Not after a disconnect: the stop already ran, and nothing would drop the session.
