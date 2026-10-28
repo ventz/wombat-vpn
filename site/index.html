@@ -173,17 +173,6 @@
     margin: 0 0 12px;
     text-align: center;
   }
-  .badge {
-    display: inline-block;
-    margin-left: 8px;
-    padding: 2px 8px;
-    border: 1px solid var(--red-lift);
-    border-radius: 999px;
-    color: var(--red-lift);
-    font-size: 11px;
-    letter-spacing: .1em;
-    vertical-align: 1px;
-  }
 
   /* The three pillars, in the order they matter: security, ease, power */
   h2 {
@@ -568,13 +557,13 @@ peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
 
   <hr class="rule">
 
-  <p class="eyebrow">5 &middot; Tailscale <span class="badge">Preview</span></p>
+  <p class="eyebrow">5 &middot; Tailscale</p>
   <h2>Your tailnet, without another app</h2>
   <p class="lead">
     Wombat joins Tailscale tailnets, and tailnets run by
     <a href="https://headscale.net/">Headscale</a>, your own open-source coordination server.
     Sign in once in your browser, and your devices are reachable by their tailnet address and
-    their MagicDNS name. New in 1.4 as a preview: the essentials work, and more is coming.
+    their MagicDNS name. New in 1.4.
   </p>
   <ul class="features subhead">
     <li>
@@ -598,8 +587,8 @@ peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
       <span>Tailscale's engine runs in a third system extension, apart from your WireGuard keys and from AnyConnect, as root-only state that never leaves it. Its SSH, Taildrop, web and debug servers are compiled out, and it can't start other programs.</span>
     </li>
     <li>
-      <h3>What the preview leaves out</h3>
-      <span>Exit nodes, subnet routes, on-demand and command-line control come later. macOS runs one VPN at a time, so connecting a tailnet switches off your other tunnel, as with any VPN app.</span>
+      <h3>Good to know</h3>
+      <span>Exit nodes, subnet routes and on-demand are on the way. macOS runs one VPN at a time, so connecting a tailnet switches off your other tunnel, as with any VPN app.</span>
     </li>
   </ul>
 
