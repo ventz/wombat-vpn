@@ -1,12 +1,12 @@
-# Tailscale and Headscale (preview)
+# Tailscale and Headscale
 
 Wombat joins [Tailscale](https://tailscale.com/) tailnets, and tailnets run by
 [Headscale](https://headscale.net/), the open-source coordination server you host yourself. The
 tunnel runs Tailscale's open-source client (the same Go code as the official apps' core). The app,
 the sign-in flow and the checks on what the coordination server may change are Wombat's own.
 
-New in 1.4 as a **preview**: joining a tailnet, signing in, tailnet addresses and MagicDNS work.
-The items under [What the preview leaves out](#what-the-preview-leaves-out) come later.
+New in 1.4: joining a tailnet, signing in, tailnet addresses and MagicDNS work. The items under
+[Not yet supported](#not-yet-supported) come later.
 
 ## Contents
 
@@ -15,13 +15,13 @@ The items under [What the preview leaves out](#what-the-preview-leaves-out) come
 - [MagicDNS](#magicdns)
 - [What the coordination server can change](#what-the-coordination-server-can-change)
 - [How it's isolated](#how-its-isolated)
-- [What the preview leaves out](#what-the-preview-leaves-out)
+- [Not yet supported](#not-yet-supported)
 - [Troubleshooting](#troubleshooting)
 - [Testing locally with Headscale](#testing-locally-with-headscale)
 
 ## Adding a tailnet
 
-**+** › **Add Tailnet (Preview)…**, then choose the coordination server: **Tailscale**, or **My
+**+** › **Add Tailnet…**, then choose the coordination server: **Tailscale**, or **My
 own server (Headscale)** and its address (`headscale.example.com`; `https://` is assumed, a port
 is fine). **This Mac in the tailnet** is the name other devices see; empty uses the Mac's name.
 The first tailnet asks you to allow
@@ -88,7 +88,7 @@ ping an arbitrary URL from your Mac, and exit the extension.
 - **Can't start programs.** The extension can't start other programs.
 - **Inbound blocked.** Peers can't open connections to this Mac (Tailscale's "shields up").
 
-## What the preview leaves out
+## Not yet supported
 
 - **Exit nodes and subnet routes:** a tailnet carries tailnet traffic only.
 - **On-demand and the kill switch.**

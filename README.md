@@ -67,7 +67,7 @@ source ocserv), the VPN most universities and companies run, with sign-in by pas
 single sign-on (SAML: Okta, Entra ID, Duo SSO…) or a client certificate from your keychain. One
 app for your own WireGuard servers and your work or campus VPN, no Cisco client needed.
 
-New in 1.4, as a preview: Wombat joins **Tailscale** tailnets, including ones run by your own
+New in 1.4: Wombat joins **Tailscale** tailnets, including ones run by your own
 [Headscale](https://headscale.net/) server, with MagicDNS and browser sign-in.
 
 ## Quick Install
@@ -115,7 +115,7 @@ scripts/build-signed.sh --install
   [OpenConnect](https://www.infradead.org/openconnect/) with DTLS, in its own system extension.
   Profiles export as `.anyconnect` files to share with colleagues. See
   [docs/OPENCONNECT.md](docs/OPENCONNECT.md).
-- **Tailscale (preview):** join a Tailscale tailnet, or one run by your own Headscale, and reach
+- **Tailscale:** join a Tailscale tailnet, or one run by your own Headscale, and reach
   your devices by tailnet address and MagicDNS name. Sign-in opens in your browser, only on your
   coordination server's own address. Wombat checks everything the server proposes before macOS
   sees it: tailnet addresses and routes only, DNS only for the tailnet's own names. Runs
@@ -218,7 +218,7 @@ vulnerability, see [SECURITY.md](SECURITY.md).
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, where secrets live, trust boundaries, leak protection |
 | [docs/OPENCONNECT.md](docs/OPENCONNECT.md) | Cisco AnyConnect: sign-in methods, profiles, what's supported, how it's isolated |
-| [docs/TAILSCALE.md](docs/TAILSCALE.md) | Tailscale and Headscale (preview): adding a tailnet, sign-in, MagicDNS, limits, how it's isolated |
+| [docs/TAILSCALE.md](docs/TAILSCALE.md) | Tailscale and Headscale: adding a tailnet, sign-in, MagicDNS, limits, how it's isolated |
 | [docs/CLI.md](docs/CLI.md) | Every `wombat` command, JSON output, exit codes, completion |
 | [docs/DEVELOPING.md](docs/DEVELOPING.md) | Building, signing, the test peer, debugging |
 

@@ -137,7 +137,7 @@ struct AddTailnetSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Add Tailnet").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
-            Text("Joins a Tailscale network. Preview: tailnet addresses and MagicDNS work; exit nodes and subnet routes come later.")
+            Text("Joins a Tailscale network. Tailnet addresses and MagicDNS work; exit nodes and subnet routes come later.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Form {
                 Picker("Coordination server", selection: $server) {

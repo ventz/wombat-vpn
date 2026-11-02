@@ -46,7 +46,7 @@ struct ContentView: View {
                     Button("New Empty Tunnel…") { showingNewTunnel = true }
                     Button("Add AnyConnect VPN…") { model.anyConnectEditor = AnyConnectEditorTarget(tunnelID: nil) }
                     if TailnetPreview.enabled {
-                        Button("Add Tailnet (Preview)…") { showingAddTailnet = true }
+                        Button("Add Tailnet…") { showingAddTailnet = true }
                     }
                 } label: {
                     Label("Add Tunnel", systemImage: "plus")
