@@ -70,6 +70,9 @@ enum ExtensionSecrets {
 
     static let tailnetNotRunning = "The Tailnet extension didn't start. Check that “Wombat Tailnet” is turned on in System Settings › General › Login Items & Extensions › Extensions › Network Extensions (ⓘ). If it is, turn it off and on again there."
 
+    /// AnyConnect connect before "Wombat OpenConnect" is allowed; shown with a Fix It button.
+    static let openConnectNeedsApproval = "Allow “Wombat OpenConnect” first: System Settings › General › Login Items & Extensions › Extensions › Network Extensions (ⓘ). Then connect again."
+
     static func notRunningMessage(_ engine: Engine) -> String {
         switch engine {
         case .wireGuard: notRunning

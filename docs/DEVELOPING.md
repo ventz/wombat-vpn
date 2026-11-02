@@ -73,6 +73,8 @@ The Debug build is **Wombat Debug** (`net.vpetkov.wombat.debug`): its own extens
 keychain items and settings, so it runs beside a release copy. System extensions only activate
 from `/Applications`. To allow one: System Settings › General › Login Items & Extensions, scroll
 to Extensions, choose By Category, click ⓘ next to Network Extensions, turn the app on, Done.
+Shortcut: `open "x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.system_extension.network_extension.extension-point"`
+opens that list directly (the app's Open System Settings and Fix It buttons use the same link).
 
 The tunnel target's pre-build step runs `scripts/build-wg-go.sh`, which builds wireguard-go and
 the vendored amneziawg-go into one universal static library (`build/wg-go/libwg-go.a`) against a

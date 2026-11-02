@@ -97,9 +97,9 @@ struct DetailHeader: View {
                     .accessibilityLabel("Error: \(error)")
                     if tunnel.errorNeedsExtension {
                         Button("Fix It…") {
-                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
+                            SystemSettingsLink.openNetworkExtensions()
                         }
-                        .help("Opens Login Items & Extensions. Under Extensions › Network Extensions (ⓘ), turn Wombat on.")
+                        .help("Opens System Settings › Network Extensions. Under Wombat.app, turn the extension on (or off and on).")
                         .accessibilityLabel("Fix it: open System Settings to turn on the network extension")
                         .accessibilityInputLabels(["Fix It", "Turn On Extension"])
                     }

@@ -378,6 +378,10 @@ struct ExtensionProblemBanner: View {
             }
             .accessibilityElement(children: .combine)
             Spacer()
+            // The interruption text sends the user to the extension's switch: one click there.
+            if message.contains("System Settings") {
+                Button("Open System Settings") { SystemSettingsLink.openNetworkExtensions() }
+            }
         }
         .padding(12)
         .background(.red.opacity(0.1))
@@ -421,7 +425,7 @@ struct ExtensionBanner: View {
             switch installer.state {
             case .needsApproval:
                 Button("Open System Settings") {
-                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
+                    SystemSettingsLink.openNetworkExtensions()
                 }
             case .failed:
                 Button("Try Again") { installer.activate() }
@@ -467,10 +471,10 @@ struct ExtensionBanner: View {
         let app = ExtensionSwitchPreview.appName
         // System Settings lists each extension by its display name under the app (verified
         // 2026-10-16: "Wombat Tunnel" and "Wombat OpenConnect" under Wombat.app).
+        // Open System Settings lands on the Network Extensions sheet itself (SystemSettingsLink;
+        // user, 2026-10-27: "opened the correct place for the extension").
         return [
-            "Click Open System Settings (General › Login Items & Extensions).",
-            "Scroll to Extensions and choose By Category.",
-            "Click the Info button (ⓘ) next to Network Extensions.",
+            "Click Open System Settings. It opens Network Extensions (General › Login Items & Extensions › Extensions › By Category).",
             "Under \(app), turn on “\(ExtensionSwitchPreview.displayName(installer.identifier))”, then click Done.",
         ]
     }

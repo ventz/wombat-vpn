@@ -70,7 +70,7 @@ Each tunnel's wg-quick text, private key included, exists in two places:
    queued (tunnel ids only, in the app's defaults), and the tunnel shows a note until they're
    delivered. The next connect launches the extension with `StartOption.awaitHandOff`; it waits up
    to 10 s for the app's hand-off. If it doesn't start at all, the app shows **Fix It…**, which
-   opens Login Items & Extensions.
+   opens System Settings at the Network Extensions list (`App/Views/SystemSettingsLink.swift`).
 
    **It never starts from an outdated copy.** Every add and edit stores a random revision id in
    the VPN configuration (a random value, never a hash: the file is world-readable) and sends it

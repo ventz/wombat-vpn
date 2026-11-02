@@ -99,6 +99,10 @@ private struct GeneralSettings: View {
                     LabeledContent("AnyConnect (OpenConnect)", value: Self.statusText(openConnectInstaller.state))
                     Button("Reinstall AnyConnect Extension") { openConnectInstaller.activate() }
                 }
+                if installer.state == .needsApproval || openConnectInstaller.state == .needsApproval {
+                    Button("Open System Settings") { SystemSettingsLink.openNetworkExtensions() }
+                        .help("Opens Network Extensions in System Settings, where Wombat's extensions are turned on")
+                }
             }
             if let error { ErrorLabel(error) }
         }

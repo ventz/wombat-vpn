@@ -214,7 +214,7 @@ final class AppModel: ObservableObject {
             }
             switch installer.state {
             case .needsApproval:
-                return "Allow “Wombat OpenConnect” first: System Settings › General › Login Items & Extensions › Network Extensions. Then connect again."
+                return ExtensionSecrets.openConnectNeedsApproval
             case .requiresApplicationsFolder:
                 return "Move Wombat to the Applications folder first: macOS only runs its VPN extensions from there."
             case .failed(let reason):

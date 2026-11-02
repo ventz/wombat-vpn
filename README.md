@@ -75,9 +75,10 @@ New in 1.4, as a preview: Wombat joins **Tailscale** tailnets, including ones ru
 1. Download **[Wombat.dmg](https://wombat.vpetkov.net/Wombat.dmg)** (always the latest version;
    also on [GitHub Releases](https://github.com/ventz/wombat-vpn/releases)).
 2. Open it and drag **Wombat** into **Applications** (network extensions only run from there).
-3. Open Wombat, then allow its network extension once: **System Settings › General › Login Items
-   & Extensions** › **Extensions** › **By Category** › **ⓘ** next to **Network Extensions** ›
-   under **Wombat.app**, turn on **Wombat Tunnel** › **Done**. Your first Cisco AnyConnect VPN
+3. Open Wombat, then allow its network extension once: click **Open System Settings** in Wombat's
+   banner, which opens **Network Extensions** (System Settings › General › Login Items &
+   Extensions › Extensions › By Category › **ⓘ** next to Network Extensions), and under
+   **Wombat.app** turn on **Wombat Tunnel** › **Done**. Your first Cisco AnyConnect VPN
    asks once more: turn on **Wombat OpenConnect** there too. Your first tailnet asks for
    **Wombat Tailnet**.
 

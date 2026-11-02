@@ -29,8 +29,12 @@ final class Tunnel: ObservableObject, Identifiable {
     @Published var stats: RuntimeStats?
     @Published var lastError: String?
     /// The error says the network extension is off: the UI offers to open its settings. Derived
-    /// from the message, so a later, unrelated error never shows the button (quality-3).
-    var errorNeedsExtension: Bool { lastError.map(Self.extensionErrors.contains) == true }
+    /// from the message, so a later, unrelated error never shows the button (quality-3). The
+    /// OpenConnect approval blocker gets the button too, but stays out of `extensionErrors`
+    /// (those are hidden or cleared once the extension answers; the blocker isn't about that).
+    var errorNeedsExtension: Bool {
+        lastError.map { Self.extensionErrors.contains($0) || $0 == ExtensionSecrets.openConnectNeedsApproval } == true
+    }
     static let extensionErrors: Set<String> = [ExtensionSecrets.notRunning, ExtensionSecrets.openConnectNotRunning, ExtensionSecrets.tailnetNotRunning]
     /// Bumped by every start and every stop the app makes, so a hand-off still waiting for an
     /// earlier start can tell that its result no longer describes the tunnel.
