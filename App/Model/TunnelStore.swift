@@ -79,6 +79,15 @@ final class Tunnel: ObservableObject, Identifiable {
     /// The last engine log lines fetched from the extension, kept after the tunnel stops.
     @Published var recentLog: [String] = []
 
+    /// Adds the drop reason to the kept log. The extension writes its own "Tunnel ended" line,
+    /// but macOS stops delivering messages once the session is stopping, so the app never gets
+    /// that last copy (device test, build 39). Same timestamp format as `RecentLog`.
+    func noteEnd(_ reason: String) {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        recentLog.append("\(f.string(from: Date())) Tunnel ended: \(LogScrubber.scrub(reason))")
+    }
+
     enum Kind: String { case wireGuard, openConnect, tailnet }
 
     init(manager: NETunnelProviderManager, id: UUID) {
@@ -325,7 +334,10 @@ final class TunnelStore: ObservableObject {
                         let ns = error as NSError
                         let text = (ns.userInfo[NSUnderlyingErrorKey] as? NSError)?.localizedDescription
                             ?? ns.localizedFailureReason ?? ns.localizedDescription
-                        Task { @MainActor in tunnel.lastError = text }
+                        Task { @MainActor in
+                            tunnel.lastError = text
+                            tunnel.noteEnd(text)
+                        }
                     }
                 }
                 self.objectWillChange.send()
@@ -1211,21 +1223,24 @@ final class TunnelStore: ObservableObject {
     /// Copies the running extension's log onto the tunnel, where it outlives the tunnel. `force`
     /// asks even when the status already says disconnected: the extension may still be stopping.
     func keepRecentLog(_ tunnel: Tunnel, force: Bool = false) async {
-        let fresh = await fetchRecentLog(tunnel, force: force)
+        var fresh = await fetchRecentLog(tunnel, force: force)
+        // A copy that was in flight at the drop must not erase the end line `noteEnd` added.
+        if !fresh.isEmpty, tunnel.status == .disconnected, let end = tunnel.recentLog.last,
+           end.contains(" Tunnel ended: "), !fresh.contains(end) { fresh.append(end) }
         // Unchanged lines aren't written back: every write redraws the Log tab (accessibility-10 M1).
         if !fresh.isEmpty, fresh != tunnel.recentLog { tunnel.recentLog = fresh }
     }
 
-    /// Copies the log every second for 45 s after a start (or until the tunnel is down and one
-    /// last copy is taken): a drop right after connecting keeps its lines (issue #1).
+    /// Copies the log every second for 45 s after a start, or until the tunnel is down: a drop
+    /// right after connecting keeps its lines (issue #1). No copy once it is down: a message to a
+    /// disconnected session makes macOS launch the extension just to answer, with an empty log
+    /// (device test, build 39); the drop reason is added by `noteEnd` instead.
     private func followLog(_ tunnel: Tunnel) {
         guard tunnel.logFollow == nil else { return }
         tunnel.logFollow = Task { [weak self] in
             for _ in 0..<45 {
-                guard let self, !Task.isCancelled else { break }
-                let down = tunnel.status == .disconnected
+                guard let self, !Task.isCancelled, tunnel.status != .disconnected else { break }
                 await self.keepRecentLog(tunnel, force: true)
-                if down { break }
                 try? await Task.sleep(for: .seconds(1))
             }
             tunnel.logFollow = nil
