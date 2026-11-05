@@ -30,13 +30,15 @@ Tunnels (talk to the app; it starts in the background if needed):
   wombat ondemand <name> on|off [--no-wifi|--wifi] [--no-ethernet|--ethernet]
   wombat ondemand <name> trust|untrust <wifi-name>
   wombat killswitch <name> on|off [--allow-lan]
-  wombat log <name>                    Recent log lines from the running tunnel
+  wombat log <name>                    Recent log lines from the tunnel's current or last run
 
 Diagnostics:
   wombat logs [-f] [--last 1h]         Unified log for the app and extension (log stream/show)
   wombat routes                        Routes through tunnel interfaces (utun*)
   wombat dns                           Which resolvers macOS uses now, and whether they're tunneled
   wombat doctor                        Check the install, extension, app and socket
+  wombat diagnostics [name] [--hide-servers] [-o FILE] [--last 30m]
+                                       A report for a problem report: versions, settings, logs (no secrets)
 
 Offline tools (no app needed):
   wombat check <file>... [--strict] [--json]   Lint wg-quick, AmneziaWG and .anyconnect files; exit 1 on errors
@@ -60,7 +62,7 @@ struct Args {
     var flags: Set<String> = []
     var options: [String: String] = [:]
 
-    init(_ raw: [String], valueOptions: Set<String> = ["--name", "--last", "--dir"]) throws {
+    init(_ raw: [String], valueOptions: Set<String> = ["--name", "--last", "--dir", "-o", "--output"]) throws {
         var i = 0
         while i < raw.count {
             let a = raw[i]
@@ -452,6 +454,46 @@ func cmdLog(_ args: Args) throws {
     for line in r.log ?? [] { print(TunnelName.line(line)) }
 }
 
+/// The app's Save Diagnostics report, plus what only macOS saw: nesessionmanager's public
+/// lines about these VPNs (starts, stops and why: superseded, the extension exited), which no
+/// Wombat log has. The app can't read the system log (sandbox); the CLI can.
+func cmdDiagnostics(_ args: Args) throws {
+    let hide = args.has("--hide-servers")
+    var request = Control.Request(.diagnostics, name: args.positional.first)
+    request.hideServers = hide
+    let r = try call(request)
+    var text = r.report ?? ""
+    let names = r.vpnNames ?? []
+    if !names.isEmpty {
+        let last = args.options["--last"] ?? "30m"
+        // nesessionmanager names a session "NESMVPNSession[Primary Tunnel:<name>:<UUID>…]": match
+        // ":<name>:", not the bare name, so a short name doesn't pull in other apps' lines.
+        let quoted = names.map { name in
+            let escaped = name.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            return "eventMessage CONTAINS \":\(escaped):\""
+        }
+        let result = run("/usr/bin/log", ["show", "--last", last, "--info", "--style", "compact", "--predicate",
+                                          "process == \"nesessionmanager\" AND (\(quoted.joined(separator: " OR ")))"])
+        var lines = result.status == 0
+            ? result.output.split(separator: "\n").map(String.init).filter { !$0.hasPrefix("Timestamp") }.suffix(400).map { LogScrubber.scrub($0) }
+            : ["(could not read the system log: /usr/bin/log exited with \(result.status))"]
+        if hide {
+            var hider = ServerHider(servers: r.servers ?? [], vpnNames: names)
+            lines = lines.map { hider.hide($0) }
+        }
+        text += "\nmacOS VPN sessions (nesessionmanager, last \(last), \(lines.count) line(s)\(hide ? "; placeholders numbered separately from the sections above" : "")):\n"
+        text += (lines.isEmpty ? ["    (none)"] : lines.map { "    \($0)" }).joined(separator: "\n") + "\n"
+    }
+    guard let path = args.options["-o"] ?? args.options["--output"] else { return print(text, terminator: "") }
+    let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+    // 0600 from the start: unless hidden, the report names your servers.
+    do { try PrivateFile.write(Data(text.utf8), to: url.path) } catch {
+        printErr("wombat: \(error.localizedDescription)")
+        exit(Exit.failure.rawValue)
+    }
+    print("Wrote \(url.path)\(hide ? "" : " (it names your servers; add --hide-servers before posting it publicly)")")
+}
+
 // MARK: Offline
 
 func cmdCheck(_ args: Args) throws {
@@ -682,6 +724,7 @@ func cmdInstallSkill(_ args: Args) throws {
     - `wombat check <file> [--strict] [--json]`: lint wg-quick files and .anyconnect profiles offline (AmneziaWG 1.0-2.0 keys included); exit 1 on errors (and on risks with --strict).
     - `(umask 077; wombat genkey > priv) && wombat pubkey < priv`: key pair (the private key file is readable only by you; keep it out of git); `wombat genpsk` for a preshared key.
     - `wombat logs --last 10m` (or `-f`): app and tunnel logs. `wombat routes`, `wombat dns`, `wombat doctor` for debugging.
+    - `wombat diagnostics <name> --hide-servers -o report.txt`: a secret-free report (settings, last log) for a bug report.
 
     Rules:
     - Never ask for or print private keys. `wombat export <name>` prints a config with keys hidden; `--with-keys` requires the user's Touch ID, so only use it when the user asks.
@@ -718,6 +761,7 @@ do {
     case "killswitch": try cmdKillSwitch(args)
     case "log": try cmdLog(args)
     case "logs": cmdLogs(args)
+    case "diagnostics": try cmdDiagnostics(args)
     case "routes": cmdRoutes()
     case "dns", "dnsleak": cmdDNS()
     case "doctor": cmdDoctor()

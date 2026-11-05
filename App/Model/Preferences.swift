@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TunnelCore
 import UserNotifications
 
 /// Appearance and behavior settings, stored in the app's own UserDefaults. None of them affect
@@ -14,6 +15,8 @@ enum Preferences {
         static let openWindowAtLaunch = "openWindowAtLaunch"
         static let notifyOnChange = "notifyOnChange"
         static let confirmQuit = "confirmQuit"
+        /// When debug logging turns itself off (seconds since 1970); absent or past means off.
+        static let debugLoggingUntil = "debugLoggingUntil"
     }
 
     static func register() {
@@ -36,6 +39,22 @@ enum Preferences {
     static var confirmQuit: Bool {
         get { defaults.bool(forKey: Key.confirmQuit) }
         set { defaults.set(newValue, forKey: Key.confirmQuit) }
+    }
+
+    /// Debug logging (Settings › General › Troubleshooting): more engine detail in the Log tab, for a
+    /// problem report. It turns itself off after a day, so a Mac doesn't keep a verbose log
+    /// forever because someone forgot a switch.
+    static let debugLoggingHours = DebugLoggingDeadline.hours
+    static var debugLoggingUntil: Date? {
+        DebugLoggingDeadline.effective(stored: defaults.double(forKey: Key.debugLoggingUntil))
+    }
+    static var debugLogging: Bool { debugLoggingUntil != nil }
+    static func setDebugLogging(_ on: Bool) {
+        if on {
+            defaults.set(Date().addingTimeInterval(TimeInterval(debugLoggingHours * 3600)).timeIntervalSince1970, forKey: Key.debugLoggingUntil)
+        } else {
+            defaults.removeObject(forKey: Key.debugLoggingUntil)
+        }
     }
 
     /// Without a Dock icon the app is an accessory: no Dock tile and no app menu, but its windows

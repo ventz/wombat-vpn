@@ -34,6 +34,10 @@ final class TailnetProvider: NEPacketTunnelProvider {
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         let source = options?[StartOption.source] as? String ?? "the system (System Settings)"
         note("Starting tunnel, requested by \(source)")
+        let debugUntil = DebugLoggingDeadline.effective(stored: (options?[StartOption.debugLogging] as? NSNumber)?.doubleValue ?? 0)
+        let debug = debugUntil != nil
+        recentLog.setDebug(debug)
+        recentLog.append(RecentLog.versionLine + (debug ? "; debug logging on" : ""))
         stateLock.withLock { stopped = false }
         let provider = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
         guard let id = provider?[ProviderConfigKey.tunnelID] as? String else { return completionHandler(Self.nsError(TailnetError.missingConfiguration)) }

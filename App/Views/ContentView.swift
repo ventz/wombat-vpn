@@ -30,6 +30,8 @@ struct ContentView: View {
                         ExtensionBanner(installer: model.tailnetInstaller)
                     } else if let problem = store.extensionProblem {
                         ExtensionProblemBanner(message: problem)
+                    } else {
+                        DebugLoggingBanner()
                     }
                 }
         }
@@ -359,6 +361,40 @@ struct EmptyStateView: View {
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Says that debug logging is on, so nobody keeps a verbose log by accident; empty when off.
+struct DebugLoggingBanner: View {
+    @AppStorage(Preferences.Key.debugLoggingUntil) private var until: Double = 0
+
+    var body: some View {
+        // Redrawn at the deadline, so the banner goes when debug logging turns itself off (A10-L1).
+        TimelineView(.explicit([Date(timeIntervalSince1970: until)])) { context in
+            if let deadline = DebugLoggingDeadline.effective(stored: until, now: context.date) { banner(deadline) }
+        }
+    }
+
+    private func banner(_ deadline: Date) -> some View {
+            HStack(spacing: 12) {
+                Image(systemName: "ladybug")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text("Debug logging is on until \(deadline.formatted(date: .abbreviated, time: .shortened)). Connect again for detailed logs, then Save Diagnostics in the Log tab.")
+                    .font(.callout)
+                Spacer()
+                Button("Turn Off") {
+                    Preferences.setDebugLogging(false)
+                    // The button goes with the banner: say what happened (accessibility-10 M2).
+                    NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
+                                         userInfo: [.announcement: "Debug logging turned off", .priority: NSAccessibilityPriorityLevel.high.rawValue])
+                }
+                .accessibilityLabel("Turn Off Debug Logging")
+            }
+            .padding(10)
+            .background(.yellow.opacity(0.12))
+            .overlay(alignment: .bottom) { Divider() }
     }
 }
 

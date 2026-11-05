@@ -154,6 +154,7 @@ wombat show home                      # like `wg show`
 wombat check *.conf --strict          # lint; exit 1 on errors or risks
 (umask 077; wombat genkey > priv.key) && wombat pubkey < priv.key
 wombat logs -f                        # stream app and tunnel logs
+wombat diagnostics work --hide-servers -o report.txt   # for a problem report (no secrets)
 ```
 
 `wombat help` lists every command; see [docs/CLI.md](docs/CLI.md) for the reference, exit codes and

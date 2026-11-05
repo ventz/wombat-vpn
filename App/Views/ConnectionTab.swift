@@ -153,26 +153,40 @@ struct LogTab: View {
     @EnvironmentObject private var store: TunnelStore
     @State private var paused = false
     @State private var copied = false
-    @State private var timer = Timer.publish(every: 2, tolerance: 0.5, on: .main, in: .common).autoconnect()
+    /// Every second: a connection the gateway ends right away lasts about that long (issue #1).
+    /// The store also copies the log at every status change, so a drop keeps its lines.
+    @State private var timer = Timer.publish(every: 1, tolerance: 0.25, on: .main, in: .common).autoconnect()
 
     private var lines: [String] { tunnel.recentLog }
+    /// Each line keeps its id as the log scrolls (accessibility-10 M1): ids by position made every
+    /// row's text change under the VoiceOver cursor once the buffer was full. A line is its own id
+    /// (it starts with a millisecond timestamp), numbered when it repeats.
+    private var rows: [(id: String, text: String)] {
+        var seen: [String: Int] = [:]
+        return lines.map { line in
+            let n = seen[line, default: 0]
+            seen[line] = n + 1
+            return (n == 0 ? line : "\(line)#\(n)", line)
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             if lines.isEmpty {
                 ContentUnavailableView("No log yet", systemImage: "text.alignleft",
-                                       description: Text("The tunnel's recent log appears here once it starts. Full history: wombat logs -f"))
+                                       description: Text("The tunnel's recent log appears here once it starts, and stays after it stops, until Wombat quits. For more detail, turn on Settings › General › Troubleshooting › Debug logging.")
+                                        .accessibilityLabel("The tunnel's recent log appears here once it starts, and stays after it stops, until Wombat quits. For more detail, turn on Debug logging in Settings, General, under Troubleshooting."))
             } else {
                 ScrollViewReader { proxy in
-                    List(Array(lines.enumerated()), id: \.offset) { index, line in
-                        Text(line)
+                    List(rows, id: \.id) { row in
+                        Text(row.text)
                             .font(.caption.monospaced())
                             .textSelection(.enabled)
-                            .id(index)
                     }
                     .listStyle(.plain)
-                    .onChange(of: lines.count) { _, count in
-                        if !paused { proxy.scrollTo(count - 1, anchor: .bottom) }
+                    // The last line, not the count: a full buffer keeps its count as it scrolls.
+                    .onChange(of: rows.last?.id) { _, last in
+                        if !paused, let last { proxy.scrollTo(last, anchor: .bottom) }
                     }
                 }
             }
@@ -193,6 +207,8 @@ struct LogTab: View {
                     Task { try? await Task.sleep(for: .seconds(2)); copied = false }
                 }
                 .disabled(lines.isEmpty)
+                Button("Save Diagnostics…") { Diagnostics.save(store, tunnel: tunnel) }
+                    .help("Saves this VPN's settings and log, with versions, to a text file for a problem report (no keys, passwords or session cookies)")
             }
             .font(.callout)
             .padding(10)
@@ -203,8 +219,7 @@ struct LogTab: View {
 
     private func refresh() async {
         guard !paused else { return }
-        let fresh = await store.fetchRecentLog(tunnel)
-        // An empty answer means the tunnel is down: keep what was there.
-        if !fresh.isEmpty { tunnel.recentLog = fresh }
+        // An empty answer means the tunnel is down: keepRecentLog keeps what was there.
+        await store.keepRecentLog(tunnel)
     }
 }

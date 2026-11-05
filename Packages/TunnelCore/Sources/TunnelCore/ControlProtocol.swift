@@ -10,7 +10,7 @@ public enum Control {
 
     public struct Request: Codable, Equatable, Sendable {
         public enum Command: String, Codable, Sendable {
-            case version, list, status, up, down, stats, `import`, export, delete, rename, onDemand, protection, log
+            case version, list, status, up, down, stats, `import`, export, delete, rename, onDemand, protection, log, diagnostics
         }
         public var v: Int = Control.protocolVersion
         public var command: Command
@@ -25,6 +25,8 @@ public enum Control {
         public var onDemand: OnDemand?
         /// `protection`: kill switch settings.
         public var protection: Protection?
+        /// `diagnostics`: replace server names, addresses and VPN names with placeholders.
+        public var hideServers: Bool?
 
         public init(_ command: Command, name: String? = nil, config: String? = nil, includeSecrets: Bool? = nil) {
             self.command = command
@@ -94,6 +96,12 @@ public enum Control {
         public var config: String?
         public var findings: [Finding]?
         public var log: [String]?
+        /// `diagnostics`: the report text (no secrets; see the app's Diagnostics).
+        public var report: String?
+        /// `diagnostics`: names the CLI hides in what it adds (the system's VPN log): server
+        /// names, and VPN names in the report's order ("VPN 1", "VPN 2"…). Only with hideServers.
+        public var servers: [String]?
+        public var vpnNames: [String]?
 
         public init(ok: Bool, error: String? = nil) {
             self.ok = ok

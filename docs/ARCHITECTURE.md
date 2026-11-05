@@ -90,6 +90,10 @@ Hence the second copy.
 
 The extension passes only an allowlist of non-secret fields (counters, endpoints, public keys)
 from the live statistics it sends the app, so secrets don't cross back. Engine log lines go to the system log as private.
+The extensions' own copy of their log (the app's Log tab, `wombat log`, Save Diagnostics) passes
+`LogScrubber` first: secret-named header values, cookie and key assignments, and long base64 or hex
+runs are replaced. Debug logging raises only libopenconnect's level (PRG_DEBUG, never PRG_TRACE or
+its HTTP dumps), and only in that copy, never in the system log.
 
 ## Cisco AnyConnect
 

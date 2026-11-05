@@ -47,12 +47,13 @@ _wombat_commands() {
     'rm:delete a tunnel'
     'ondemand:connect automatically, or trust a Wi-Fi network'
     'killswitch:block traffic outside the tunnel'
-    'log:recent log lines from a running tunnel'
+    'log:recent log lines from a tunnel'
     'logs:app and extension logs'
     'routes:routes through tunnel interfaces'
     'dns:resolvers in use, and whether they are tunneled'
     'dnsleak:resolvers in use, and whether they are tunneled'
     'doctor:check the install, extension, app and socket'
+    'diagnostics:a report for a problem report (no secrets)'
     'check:lint wg-quick files and .anyconnect profiles'
     'lint:lint wg-quick files and .anyconnect profiles'
     'genkey:new private key'
@@ -120,6 +121,11 @@ _wombat() {
       _arguments \
         '(-f --follow --last)'{-f,--follow}'[stream new log lines]' \
         '(-f --follow)--last[how far back to show]:duration (like 10m, 1h, 2d): ' && ret=0 ;;
+    diagnostics)
+      _arguments '--hide-servers[replace server names, addresses and VPN names with placeholders]' \
+        '(-o --output)'{-o,--output}'[write the report to a file]:file:_files' \
+        '--last[how far back the system VPN log goes]:duration (like 30m, 1h): ' \
+        '::tunnel:_wombat_tunnels' && ret=0 ;;
     check|lint)
       _arguments "$json" \
         '--strict[also exit 1 on security risks]' \

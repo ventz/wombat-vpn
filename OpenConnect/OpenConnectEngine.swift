@@ -18,6 +18,10 @@ final class OpenConnectEngine: @unchecked Sendable {
         var pin: String?
         var userAgent: String
         var dtls: Bool
+        /// Debug logging: libopenconnect at PRG_DEBUG (headers, DPD, keepalives), never PRG_TRACE
+        /// (packet contents) and never its HTTP dumps (the CONNECT request carries the cookie and
+        /// the DTLS master secret). The lines go only to the app's Log tab, scrubbed.
+        var debug = false
     }
 
     struct Failure: LocalizedError {
@@ -43,6 +47,10 @@ final class OpenConnectEngine: @unchecked Sendable {
     /// reconnect would abort before any connection exists, so no BYE could be sent; S5C) and
     /// sent from the reconnected callback instead.
     private var cancelAfterReconnect = false
+    /// libopenconnect's last error line (scrubbed, gateway name removed): when the gateway ends
+    /// the session, its own reason ("Received server disconnect: … 'Posture Assessment Failed'")
+    /// is only in this line, and the error code alone says just "the gateway ended the session".
+    private var lastErrorLine: String?
 
     /// Called on the main-loop thread after libopenconnect reconnected (new network, gateway
     /// restart): the gateway may hand out different settings.
@@ -83,6 +91,14 @@ final class OpenConnectEngine: @unchecked Sendable {
             ? message.replacingOccurrences(of: settings.session.cookie, with: "<session>") : message
         if let key = settings.session.strapKey { scrubbed = scrubbed.replacingOccurrences(of: key, with: "<key>") }
         logLine(level, String(scrubbed.prefix(1024)))
+        if level == PRG_ERR {
+            var line = LogScrubber.scrub(scrubbed).trimmingCharacters(in: .whitespaces)
+            // The reason travels in the stop error, which nesessionmanager may log: no gateway name.
+            for name in [settings.session.host, settings.session.address].compactMap({ $0 }) where !name.isEmpty {
+                line = line.replacingOccurrences(of: name, with: "the gateway", options: .caseInsensitive)
+            }
+            lock.withLock { lastErrorLine = String(line.prefix(200)) }
+        }
     }
 
     // MARK: Connecting
@@ -95,7 +111,7 @@ final class OpenConnectEngine: @unchecked Sendable {
             throw Failure(errorDescription: "libopenconnect could not start")
         }
         self.vpn = vpn
-        openconnect_set_loglevel(vpn, PRG_INFO)
+        openconnect_set_loglevel(vpn, settings.debug ? PRG_DEBUG : PRG_INFO)
         // The full user agent the sign-in used: the gateway may tie the session to it.
         _ = openconnect_set_useragent(vpn, settings.userAgent)
         guard openconnect_set_protocol(vpn, "anyconnect") == 0,
@@ -192,7 +208,8 @@ final class OpenConnectEngine: @unchecked Sendable {
             // libopenconnect only closes the tun descriptor when it ran a vpnc-script.
             TunnelDevice.closeAndRelease(ownFD)
             lock.withLock { running = false; sessionOpen = false }  // only after the close (S5B-L4)
-            onExit(requested ? nil : Self.describe(result))
+            let detail = lock.withLock { lastErrorLine }
+            onExit(requested ? nil : Self.describe(result) + (detail.map { "; last engine error: \($0)" } ?? ""))
         }
         thread.name = "net.vpetkov.wombat.openconnect.mainloop"
         thread.stackSize = 1 << 20
@@ -398,6 +415,8 @@ final class OpenConnectEngine: @unchecked Sendable {
     private static let reconnected: @convention(c) (UnsafeMutableRawPointer?) -> Void = { privdata in
         guard let engine = engine(privdata) else { return }
         engine.log(PRG_INFO, "Reconnected to the gateway")
+        // Recovered: an earlier error isn't the reason for a later end.
+        engine.lock.withLock { engine.lastErrorLine = nil }
         // The goodbye pass after a stop during a pause: cancel now that a connection exists.
         if engine.lock.withLock({ () -> Bool in defer { engine.cancelAfterReconnect = false }; return engine.cancelAfterReconnect }) {
             engine.send(WOMBAT_OC_CMD_CANCEL)

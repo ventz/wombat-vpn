@@ -22,12 +22,22 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
     private var plan: OpenConnectNetworkPlan?
     private var gateway: String?
     private var connectedSince: Date?
+    /// This start asked for debug logging (StartOption.debugLogging) until then: libopenconnect
+    /// runs at PRG_DEBUG, and its debug lines are kept only before the deadline (quality-10 M6).
+    private var debugUntil: Date?
 
     private var store: OpenConnectStore { SecretStore.shared as! OpenConnectStore }
 
-    override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
+    override func startTunnel(options: [String: NSObject]?, completionHandler handler: @escaping (Error?) -> Void) {
+        // Every failure crosses to the app as NSError, or its text is lost (ProviderError).
+        let completionHandler: (Error?) -> Void = { handler($0.map(ProviderError.ns)) }
         let source = options?[StartOption.source] as? String ?? "the system (System Settings or on-demand)"
         note("Starting tunnel, requested by \(source)")
+        let debugUntil = DebugLoggingDeadline.effective(stored: (options?[StartOption.debugLogging] as? NSNumber)?.doubleValue ?? 0)
+        let debug = debugUntil != nil
+        recentLog.setDebug(debug)
+        recentLog.append(RecentLog.versionLine + (debug ? "; debug logging on" : ""))
+        self.debugUntil = debugUntil
         stateLock.withLock { stopped = false }
         let provider = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
         guard let id = provider?[ProviderConfigKey.tunnelID] as? String else { return completionHandler(OpenConnectError.missingConfiguration) }
@@ -76,7 +86,7 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
             session = held
             engine = OpenConnectEngine(settings: .init(session: held, pin: profile.serverCertificate,
                                                        userAgent: profile.userAgent ?? AnyConnectXML.defaultUserAgent,
-                                                       dtls: profile.dtls)) { [weak self] level, message in
+                                                       dtls: profile.dtls, debug: debugUntil != nil)) { [weak self] level, message in
                 self?.engineLog(level, message)
             }
         } catch {
@@ -150,7 +160,7 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
                         guard let self, let reason else { return }
                         // The gateway ended it, or reconnecting failed for 5 minutes.
                         self.note("Tunnel ended: \(reason)")
-                        self.cancelTunnelWithError(OpenConnectError.engine(reason))
+                        self.cancelTunnelWithError(ProviderError.ns(OpenConnectError.engine(reason)))
                     }
                 } catch {
                     self.claimedFD = nil
@@ -338,8 +348,14 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
 
     /// Engine lines name the gateway and addresses: private in the system log. Some carry text
     /// the gateway sent (the CONNECT status line, X-Reason), cleaned to one line (review NEW-8).
+    /// Debug-level lines (debug logging) go only to the Log tab, never the system log (quality-10
+    /// M3), and only until the deadline.
     private func engineLog(_ level: Int32, _ message: String) {
-        let message = TunnelName.line(message)
+        if level >= PRG_DEBUG {
+            guard let until = debugUntil, Date() < until else { return }
+            return recentLog.append(message)
+        }
+        let message = LogScrubber.scrub(message)
         if level == PRG_ERR { log.error("engine: \(message, privacy: .private)") } else { log.debug("engine: \(message, privacy: .private)") }
         recentLog.append(message)
     }

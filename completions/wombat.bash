@@ -49,7 +49,7 @@ _wombat() {
     COMPREPLY=()
 
     local commands="status list ls up connect down disconnect toggle show import export rename
-        delete rm ondemand killswitch log logs routes dns dnsleak doctor check lint genkey pubkey
+        delete rm ondemand killswitch log logs routes dns dnsleak doctor diagnostics check lint genkey pubkey
         genpsk completion install-skill start stop quit version help"
 
     # The command, and the arguments before the cursor without flags and option values.
@@ -59,7 +59,7 @@ _wombat() {
         word=${words[i]}
         if ((skip)); then skip=0; continue; fi
         case $word in
-            --name | --last | --dir) skip=1 ;;
+            --name | --last | --dir | -o | --output) skip=1 ;;
             -?*) [[ -n $cmd ]] || cmd=$word ;;
             *) if [[ -z $cmd ]]; then cmd=$word; else args+=("$word"); fi ;;
         esac
@@ -74,6 +74,7 @@ _wombat() {
     case $prev in
         --name | --last) return ;;  # free text
         --dir) _wombat_files -d; return ;;
+        -o | --output) _wombat_files; return ;;
     esac
 
     if [[ $cur == -?* || ($cur == - && $cmd != import && $cmd != check && $cmd != lint) ]]; then
@@ -85,6 +86,7 @@ _wombat() {
             ondemand) flags="--wifi --no-wifi --ethernet --no-ethernet --json" ;;
             killswitch) flags="--allow-lan" ;;
             logs) flags="-f --follow --last" ;;
+            diagnostics) flags="--hide-servers -o --output --last" ;;
             check | lint) flags="--strict --json" ;;
             install-skill | install-skills) flags="--dir" ;;
             completion)
@@ -98,7 +100,7 @@ _wombat() {
     fi
 
     case $cmd in
-        status | list | ls | up | connect | down | disconnect | toggle | export | rename | delete | rm | log)
+        status | list | ls | up | connect | down | disconnect | toggle | export | rename | delete | rm | log | diagnostics)
             ((pos == 0)) && _wombat_tunnels ;;
         show) _wombat_tunnels ;;
         ondemand)

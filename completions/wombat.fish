@@ -35,7 +35,7 @@ function __wombat_args
             continue
         end
         switch $token
-            case --name --last --dir
+            case --name --last --dir -o --output
                 set skip 1
             case '-?*'
             case '*'
@@ -63,7 +63,7 @@ function __wombat_setup
 end
 
 set -l commands status list ls up connect down disconnect toggle show import export rename \
-    delete rm ondemand killswitch log logs routes dns dnsleak doctor check lint genkey pubkey \
+    delete rm ondemand killswitch log logs routes dns dnsleak doctor diagnostics check lint genkey pubkey \
     genpsk completion install-skill install-skills start stop quit version help
 set -l no_command "not __fish_seen_subcommand_from $commands"
 
@@ -82,11 +82,12 @@ complete -c wombat -n $no_command -a rename -d 'Rename a tunnel'
 complete -c wombat -n $no_command -a 'delete rm' -d 'Delete a tunnel'
 complete -c wombat -n $no_command -a ondemand -d 'Connect automatically, or trust a Wi-Fi network'
 complete -c wombat -n $no_command -a killswitch -d 'Block traffic outside the tunnel'
-complete -c wombat -n $no_command -a log -d 'Recent log lines from a running tunnel'
+complete -c wombat -n $no_command -a log -d 'Recent log lines from a tunnel'
 complete -c wombat -n $no_command -a logs -d 'App and extension logs'
 complete -c wombat -n $no_command -a routes -d 'Routes through tunnel interfaces'
 complete -c wombat -n $no_command -a 'dns dnsleak' -d 'Resolvers in use, and whether they are tunneled'
 complete -c wombat -n $no_command -a doctor -d 'Check the install, extension, app and socket'
+complete -c wombat -n $no_command -a diagnostics -d 'A report for a problem report (no secrets)'
 complete -c wombat -n $no_command -a 'check lint' -d 'Lint wg-quick files and .anyconnect profiles'
 complete -c wombat -n $no_command -a genkey -d 'New private key'
 complete -c wombat -n $no_command -a pubkey -d 'Public key for the private key on stdin'
@@ -99,7 +100,7 @@ complete -c wombat -n $no_command -a version -d 'Print the version'
 complete -c wombat -n $no_command -a help -d 'Show help'
 
 # Tunnel names
-complete -c wombat -n '__wombat_at 0 status list ls up connect down disconnect toggle export rename delete rm log ondemand killswitch' \
+complete -c wombat -n '__wombat_at 0 status list ls up connect down disconnect toggle export rename delete rm log diagnostics ondemand killswitch' \
     -a '(__wombat_tunnels)'
 complete -c wombat -n '__fish_seen_subcommand_from show' -a '(__wombat_tunnels)'
 
@@ -122,6 +123,9 @@ complete -c wombat -n '__wombat_at 1 killswitch' -a off -d 'Turn the kill switch
 complete -c wombat -n '__fish_seen_subcommand_from killswitch' -l allow-lan -d 'Let local network traffic through'
 complete -c wombat -n '__fish_seen_subcommand_from logs' -s f -l follow -d 'Stream new log lines'
 complete -c wombat -n '__fish_seen_subcommand_from logs' -l last -x -d 'How far back to show (like 10m, 1h)'
+complete -c wombat -n '__fish_seen_subcommand_from diagnostics' -l hide-servers -d 'Replace server names, addresses and VPN names with placeholders'
+complete -c wombat -n '__fish_seen_subcommand_from diagnostics' -s o -l output -r -F -d 'Write the report to a file'
+complete -c wombat -n '__fish_seen_subcommand_from diagnostics' -l last -x -d 'How far back the system VPN log goes (like 30m)'
 complete -c wombat -n '__fish_seen_subcommand_from check lint' -F -d 'Config file'
 complete -c wombat -n '__fish_seen_subcommand_from check lint' -l strict -d 'Also exit 1 on security risks'
 complete -c wombat -n '__wombat_at 0 completion' -a install -d 'Set up Tab completion for your shells'

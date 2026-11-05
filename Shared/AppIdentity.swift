@@ -76,4 +76,9 @@ enum StartOption {
     /// reboot or an update the app can't hand configurations over until this start launches it.
     /// The extension then waits (at most 10 s) for a copy with the configuration's revision.
     static let awaitHandOff = "awaitHandOff"
+    /// Debug logging is on (Settings › General › Troubleshooting): when it ends, as seconds since
+    /// 1970 (NSNumber). The AnyConnect engine then logs in more detail, into the app's Log tab
+    /// only (never the system log, which anyone on the Mac can read); every extension keeps a
+    /// longer log. Starts that macOS makes on its own (on-demand) carry no options.
+    static let debugLogging = "debugLogging"
 }

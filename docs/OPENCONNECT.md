@@ -135,7 +135,21 @@ doesn't count as routing IPv6, and an IPv6-only gateway that routes `2000::/3` b
 ## Troubleshooting
 
 - `wombat doctor` shows whether the OpenConnect extension is installed and enabled.
-- `wombat logs -f` streams the extension's log; the Log tab shows the same for one VPN.
+- The VPN's **Log** tab shows the extension's log, and keeps it after the VPN disconnects (until
+  Wombat quits). When
+  the gateway ends a session, the VPN's Overview shows why, with the gateway's own message when it
+  sent one. (The system log, `wombat logs -f`, has the same steps, with their details marked
+  private.)
+- **Connects, then drops right away:** turn on **Settings › General › Troubleshooting › Debug
+  logging**, connect again, then click **Save Diagnostics…** in the Log tab (or run
+  `wombat diagnostics <name> --hide-servers -o report.txt`) and attach the file to your report.
+  The file holds no keys, passwords or session cookies. With **Hide server names…** (the default
+  in the app), server names, addresses and VPN names are replaced too. A gateway that ends
+  sessions from clients it doesn't recognize (posture or client-version policies) usually says so
+  in that log; your IT department can also look up the session's disconnect reason
+  (`%ASA-4-113019`) on the gateway.
+- Turning **DTLS** off under Advanced is a quick test when the tunnel drops or stalls: the tunnel
+  then runs over TLS only.
 - "isn't trusted by macOS" when connecting although the sign-in worked: the gateway's CA is
   trusted only in your login keychain's trust settings, which the extension (running as root)
   doesn't use. Have IT install the CA system-wide, or pin the gateway's certificate under

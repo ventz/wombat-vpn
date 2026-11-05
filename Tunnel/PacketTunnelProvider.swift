@@ -24,10 +24,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }()
 
-    override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
+    override func startTunnel(options: [String: NSObject]?, completionHandler handler: @escaping (Error?) -> Void) {
+        // Every failure crosses to the app as NSError, or its text is lost (ProviderError).
+        let completionHandler: (Error?) -> Void = { handler($0.map(ProviderError.ns)) }
         let source = options?[StartOption.source] as? String ?? "the system (on-demand or System Settings)"
         log.notice("Starting tunnel, requested by \(source, privacy: .public)")
         self.recentLog.append("Starting tunnel, requested by \(source)")
+        let debugUntil = DebugLoggingDeadline.effective(stored: (options?[StartOption.debugLogging] as? NSNumber)?.doubleValue ?? 0)
+        let debug = debugUntil != nil
+        recentLog.setDebug(debug)
+        recentLog.append(RecentLog.versionLine + (debug ? "; debug logging on" : ""))
         stateLock.withLock { stopped = false }
         // Created here, on NE's queue, before any wait: the lazy adapter must not be first touched
         // from two queues at once (S3-L5).
@@ -154,7 +160,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard let watch = ConsoleOwnerWatch(owner: owner, onOtherUser: { [weak self] in
             self?.log.notice("Another user took the screen; stopping the tunnel that started at the login window")
             self?.recentLog.append("Another user took the screen; stopping the tunnel that started at the login window")
-            self?.cancelTunnelWithError(TunnelError.notOwner)
+            self?.cancelTunnelWithError(ProviderError.ns(TunnelError.notOwner))
         }) else { throw TunnelError.notOwner }
         // A stop that arrived meanwhile wins, and never leaves a watch running (security-6 L5).
         let previous: ConsoleOwnerWatch?? = stateLock.withLock {

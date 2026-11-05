@@ -1,5 +1,6 @@
 import ServiceManagement
 import SwiftUI
+import TunnelCore
 
 struct SettingsView: View {
     var body: some View {
@@ -91,6 +92,7 @@ private struct GeneralSettings: View {
                     }
             }
             UpdatesSection()
+            TroubleshootingSection()
             Section("Network extensions") {
                 LabeledContent("WireGuard", value: Self.statusText(installer.state))
                 Button("Reinstall WireGuard Extension") { installer.activate() }
@@ -117,6 +119,40 @@ private struct GeneralSettings: View {
         case .requiresApplicationsFolder: return "Move the app to /Applications"
         case .failed(let message): return "Failed: \(message)"
         case .unknown: return "Unknown"
+        }
+    }
+}
+
+/// Debug logging and Save Diagnostics, for problem reports (issue #1, 2026-11-05).
+private struct TroubleshootingSection: View {
+    @EnvironmentObject private var store: TunnelStore
+    /// Observed so the section redraws when the switch (or the banner's Turn Off) changes it.
+    @AppStorage(Preferences.Key.debugLoggingUntil) private var until: Double = 0
+
+    /// Moved on at the deadline, so the switch flips back when debug logging turns itself off
+    /// (accessibility-10 L1; a TimelineView would take the Section out of the Form's grouping).
+    @State private var now = Date()
+    private var deadline: Date? { DebugLoggingDeadline.effective(stored: until, now: now) }
+    private var isOn: Bool { deadline != nil }
+
+    var body: some View {
+        Section {
+            Toggle("Debug logging", isOn: Binding(get: { isOn }, set: { Preferences.setDebugLogging($0) }))
+            if let deadline {
+                LabeledContent("Turns off", value: deadline.formatted(date: .abbreviated, time: .shortened))
+            }
+            Button("Save Diagnostics…") { Diagnostics.save(store) }
+                .help("Saves versions, extension states, each VPN's settings and its last log to a text file, without keys, passwords or session cookies")
+        } header: {
+            Text("Troubleshooting")
+        } footer: {
+            Text("Debug logging applies from the next connect: AnyConnect VPNs log every header and keepalive, and every tunnel keeps a longer log in its Log tab. It turns itself off after \(Preferences.debugLoggingHours) hours, and a connection made with it stops adding detail then. Logs never include keys, passwords or session cookies, and the kept log is gone when Wombat quits. Save Diagnostics makes a file to attach to a problem report.")
+        }
+        .task(id: until) {
+            now = Date()
+            let wait = until - now.timeIntervalSince1970
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait + 1)) }
+            now = Date()
         }
     }
 }

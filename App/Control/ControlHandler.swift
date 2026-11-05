@@ -275,7 +275,24 @@ final class ControlHandler {
                 return .failure("No tunnel named \"\(request.name ?? "")\"")
             }
             var r = Control.Response(ok: true)
-            r.log = await store.fetchRecentLog(t)
+            // A tunnel that is down answers nothing: the copy kept from its last run instead.
+            await store.keepRecentLog(t)
+            let fit = LogBudget.newest(t.recentLog, maxBytes: LogBudget.cliReplyBytes)
+            r.log = (fit.leftOut > 0 ? ["(\(fit.leftOut) earlier line(s) left out; Save Diagnostics in the app has them all)"] : []) + fit.lines
+            return r
+
+        case .diagnostics:
+            // Read-only and secret-free (the same report as Save Diagnostics): no approval.
+            var only: Tunnel?
+            if let name = request.name {
+                guard let t = store.tunnel(named: name) else { return .failure("No tunnel named \"\(name)\"") }
+                only = t
+            }
+            let hide = request.hideServers == true
+            var r = Control.Response(ok: true)
+            r.report = await Diagnostics.report(store, tunnel: only, hideServers: hide, logBytes: LogBudget.cliReplyBytes)
+            r.vpnNames = (only.map { [$0] } ?? store.tunnels).map(\.name)
+            if hide { r.servers = Diagnostics.serverNames(only.map { [$0] } ?? store.tunnels) }
             return r
 
         case .delete:

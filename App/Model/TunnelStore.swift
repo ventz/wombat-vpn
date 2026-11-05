@@ -57,6 +57,25 @@ final class Tunnel: ObservableObject, Identifiable {
         startCount += 1
         stoppedByApp = true
     }
+
+    /// The app's stop has been seen through to .disconnected: a later session that macOS starts
+    /// (on-demand, System Settings) and that then drops must still say why (quality-10 M1).
+    func clearStopMark() { stoppedByApp = false }
+
+    /// Copies the extension's log every second for a while after a start (TunnelStore.followLog).
+    var logFollow: Task<Void, Never>?
+
+    var disconnectRuleStatus: DisconnectReasonRule.Status { Self.ruleStatus(status) }
+    static func ruleStatus(_ status: NEVPNStatus) -> DisconnectReasonRule.Status {
+        switch status {
+        case .disconnected: .disconnected
+        case .connecting: .connecting
+        case .connected: .connected
+        case .reasserting: .reasserting
+        case .disconnecting: .disconnecting
+        default: .other
+        }
+    }
     /// The last engine log lines fetched from the extension, kept after the tunnel stops.
     @Published var recentLog: [String] = []
 
@@ -281,12 +300,25 @@ final class TunnelStore: ObservableObject {
                 if tunnel.status == .disconnected { tunnel.stats = nil }  // no stale counters (Q2-L4)
                 // A tunnel that was connected at launch gets the 1.2.0 migration now (quality-6 M1).
                 if tunnel.status == .disconnected, !self.neutralizedServers { Task { await self.neutralizeServerAddresses() } }
+                // The extension's log lives only as long as its tunnel: copy it every second after
+                // a start, whether or not the Log tab is open, and once more while it stops, so the
+                // Log tab and Save Diagnostics still have it after a drop (issue #1: the gateway
+                // ended the session a second after connecting, and the Log tab said "No log yet").
+                // The status can skip .disconnecting (it is read live), so the follow-up copies
+                // don't depend on seeing it (quality-10 H2).
+                if before != tunnel.status {
+                    if [.connecting, .connected, .reasserting].contains(tunnel.status) { self.followLog(tunnel) }
+                    if tunnel.status == .disconnecting { Task { await self.keepRecentLog(tunnel, force: true) } }
+                }
                 // A start that fails ends in .disconnected; the extension's reason (for example
-                // the kill-switch DNS message) is only available from the connection. A tailnet
-                // can also be ended while up, by the plan gate or the owner check: its reason is
-                // fetched the same way (quality-9 M3).
-                let endedUnasked = before == .connecting || (tunnel.isTailnet && [.connected, .reasserting].contains(before))
-                if endedUnasked, tunnel.status == .disconnected, !tunnel.stoppedByApp {
+                // the kill-switch DNS message) is only available from the connection. A tunnel
+                // can also be ended while up: the gateway ends an AnyConnect session, a tailnet's
+                // plan gate or owner check ends it (quality-9 M3), WireGuard's engine fails. Its
+                // reason is fetched the same way, for every kind (issue #1).
+                let fetchReason = DisconnectReasonRule.shouldFetch(before: Tunnel.ruleStatus(before), now: tunnel.disconnectRuleStatus,
+                                                                   stoppedByApp: tunnel.stoppedByApp)
+                if tunnel.status == .disconnected, tunnel.stoppedByApp { tunnel.clearStopMark() }
+                if fetchReason {
                     tunnel.manager.connection.fetchLastDisconnectError { error in
                         guard let error else { return }
                         // macOS may wrap the provider's error; its own message is the useful one.
@@ -882,6 +914,7 @@ final class TunnelStore: ObservableObject {
             try await tunnel.manager.loadFromPreferences()
         }
         var options: [String: NSObject] = [StartOption.source: source as NSString]
+        if let until = Preferences.debugLoggingUntil { options[StartOption.debugLogging] = until.timeIntervalSince1970 as NSNumber }
         if let endpoints, !endpoints.isEmpty {
             options[StartOption.endpoints] = endpoints as NSDictionary
         }
@@ -963,6 +996,7 @@ final class TunnelStore: ObservableObject {
             try await tunnel.manager.loadFromPreferences()
         }
         var options: [String: NSObject] = [StartOption.source: source as NSString]
+        if let until = Preferences.debugLoggingUntil { options[StartOption.debugLogging] = until.timeIntervalSince1970 as NSNumber }
         // The revision the sign-in was made for, not whatever is current now: an edit landing
         // after the check above gives the extension a different revision, and it refuses to start
         // the old session with the new profile (fails closed; S5C-M5).
@@ -1174,9 +1208,33 @@ final class TunnelStore: ObservableObject {
         return stats
     }
 
-    func fetchRecentLog(_ tunnel: Tunnel) async -> [String] {
+    /// Copies the running extension's log onto the tunnel, where it outlives the tunnel. `force`
+    /// asks even when the status already says disconnected: the extension may still be stopping.
+    func keepRecentLog(_ tunnel: Tunnel, force: Bool = false) async {
+        let fresh = await fetchRecentLog(tunnel, force: force)
+        // Unchanged lines aren't written back: every write redraws the Log tab (accessibility-10 M1).
+        if !fresh.isEmpty, fresh != tunnel.recentLog { tunnel.recentLog = fresh }
+    }
+
+    /// Copies the log every second for 45 s after a start (or until the tunnel is down and one
+    /// last copy is taken): a drop right after connecting keeps its lines (issue #1).
+    private func followLog(_ tunnel: Tunnel) {
+        guard tunnel.logFollow == nil else { return }
+        tunnel.logFollow = Task { [weak self] in
+            for _ in 0..<45 {
+                guard let self, !Task.isCancelled else { break }
+                let down = tunnel.status == .disconnected
+                await self.keepRecentLog(tunnel, force: true)
+                if down { break }
+                try? await Task.sleep(for: .seconds(1))
+            }
+            tunnel.logFollow = nil
+        }
+    }
+
+    func fetchRecentLog(_ tunnel: Tunnel, force: Bool = false) async -> [String] {
         guard let session = tunnel.manager.connection as? NETunnelProviderSession,
-              tunnel.status != .disconnected, tunnel.status != .invalid,
+              force || tunnel.status != .disconnected, tunnel.status != .invalid,
               let reply = await send(.recentLog, to: session) else { return [] }
         return String(decoding: reply, as: UTF8.self).split(separator: "\n").map(String.init)
     }

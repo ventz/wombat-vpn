@@ -115,10 +115,16 @@ Task {
         print("session STRAP key: \(session.strapKey == nil ? "none" : "present")")
         print("session: host \(session.host):\(session.port), address \(session.address ?? "-"), certificate \(session.serverCertificateSHA256.prefix(16))…, token \(session.cookie.count) characters")
 
+        // OCPROBE_DEBUG=1: libopenconnect at debug level, as with Wombat's debug logging, and a
+        // check that the scrubbed lines (what the Log tab and diagnostics get) hold no secret.
+        let debug = ProcessInfo.processInfo.environment["OCPROBE_DEBUG"] == "1"
+        let collected = Collected()
         let engine = OpenConnectEngine(settings: .init(session: session, pin: profile.serverCertificate,
-                                                       userAgent: AnyConnectXML.defaultUserAgent, dtls: profile.dtls)) { level, message in
-            print("engine[\(level)]: \(message)")
+                                                       userAgent: AnyConnectXML.defaultUserAgent, dtls: profile.dtls, debug: debug)) { level, message in
+            print("engine[\(level)]: \(debug ? LogScrubber.scrub(message) : message)")
+            collected.add(message)
         }
+        defer { if debug { collected.check(secrets: [session.cookie] + (session.strapKey.map { [$0] } ?? [])) } }
         let info = try engine.connect()
         let plan = try OpenConnectNetworkPlan.make(info)
         print("assigned: \(info)")
@@ -182,3 +188,29 @@ Task {
     done.signal()
 }
 done.wait()
+
+/// Engine lines from a debug run, checked after it (OCPROBE_DEBUG).
+final class Collected: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    func add(_ line: String) { lock.withLock { lines.append(line) } }
+
+    /// Secrets: the token and STRAP key the probe holds, plus every value of a header named like
+    /// a secret in the raw lines. None may survive LogScrubber.
+    func check(secrets known: [String]) {
+        let raw = lock.withLock { lines }
+        var secrets = known
+        for line in raw {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let name = line[..<colon].lowercased()
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if ["session-id", "cookie", "secret", "strap", "app-id", "token", "auth", "saml"].contains(where: name.contains), value.count >= 6 { secrets.append(value) }
+        }
+        let scrubbed = raw.map { LogScrubber.scrub($0) }
+        let leaks = secrets.filter { s in scrubbed.contains { $0.contains(s) } }
+        let changed = zip(raw, scrubbed).filter { LogScrubber.scrub($0.0) != TunnelName.line(String($0.0.prefix(LogScrubber.maxLineLength))) }
+        print("debug check: \(raw.count) lines, \(secrets.count) secret values, \(changed.count) lines changed by the scrubber, \(leaks.count) leaked")
+        for (before, after) in changed { print("  scrubbed: \(after)  [was \(before.count) chars]") }
+        if !leaks.isEmpty { print("oc-probe: FAILED: a secret survived the scrubber"); exit(1) }
+    }
+}

@@ -48,7 +48,7 @@ themselves keep running when the app quits, and the offline tools work without i
 | `wombat ondemand <name> on\|off [--no-wifi\|--wifi] [--no-ethernet\|--ethernet]` | Connect automatically (WireGuard only: AnyConnect needs a sign-in each time) |
 | `wombat ondemand <name> trust\|untrust <wifi-name>` | Disconnect on (or stop trusting) a Wi-Fi network |
 | `wombat killswitch <name> on\|off [--allow-lan]` | Block traffic outside the tunnel; the local network stays blocked unless `--allow-lan`, which also works with `off` for a split tunnel |
-| `wombat log <name>` | Recent log lines from the running tunnel |
+| `wombat log <name>` | Recent log lines from the tunnel's current run, or its last one once it has stopped |
 
 ## Diagnostics
 
@@ -58,6 +58,13 @@ themselves keep running when the app quits, and the offline tools work without i
 | `wombat routes` | Routes through tunnel interfaces (`utun*`) |
 | `wombat dns` | The resolvers macOS uses now, and whether each goes through a tunnel |
 | `wombat doctor` | Checks the install, the extension, the app, the socket, and macOS's VPN daemon |
+| `wombat diagnostics [name] [--hide-servers] [-o FILE] [--last 30m]` | A report to attach to a problem report: versions, extension states, each VPN's settings and last log, and macOS's own VPN session log for these VPNs. No keys, passwords or session cookies; `--hide-servers` also replaces server names, addresses and VPN names. Written 0600 with `-o` |
+
+For a problem that only shows up once, turn on **Settings › General › Troubleshooting › Debug
+logging** first (the AnyConnect engine then logs every header and keepalive, secrets removed; it
+turns itself off after 24 hours), reproduce it, then run `wombat diagnostics`. The extensions'
+detailed lines go only to Wombat (the Log tab, `wombat log`, `wombat diagnostics`), never to the
+system log, which every account on the Mac can read.
 
 `wombat doctor` also detects a known macOS failure: after weeks of uptime `nesessionmanager` can run
 out of file descriptors. Extensions then fail to activate with a misleading "NetworkExtension key
