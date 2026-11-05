@@ -359,7 +359,9 @@ struct SignInForm: View {
                             .accessibilityLabel("Message from the gateway")
                     }
                     if let message = prompt.message {
-                        Text(message).font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        // What the gateway asks for is the one line that changes between steps
+                        // (password, then a one-time code), so it reads as the step's heading.
+                        Text(message).font(.title3.weight(.semibold)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     }
                     if let error = prompt.error {
                         ErrorLabel(error).font(.callout)
@@ -392,8 +394,7 @@ struct SignInForm: View {
 
     @ViewBuilder
     private func row(_ field: AuthField) -> some View {
-        let trimmed = field.label.trimmingCharacters(in: CharacterSet(charactersIn: ": "))
-        let label = trimmed.isEmpty ? (field.secondAuth ? "Passcode" : field.name.capitalized) : trimmed
+        let label = prompt.form.label(for: field, message: prompt.message)
         // The instructions and the error, again on the field that has focus (A5-H1).
         let hint = (prompt.error.map { "Error: \($0). " } ?? "") + (prompt.message ?? "")
         switch field.kind {
@@ -404,7 +405,7 @@ struct SignInForm: View {
                 .accessibilityHint(hint)
         case .password:
             SecureField(label, text: binding(field.name))
-                .textContentType(field.secondAuth || prompt.form.fields.contains(where: { $0.name == "answer" }) ? .oneTimeCode : .password)
+                .textContentType(prompt.form.asksForCode(field, message: prompt.message) ? .oneTimeCode : .password)
                 .focused($focused, equals: field.name)
                 .accessibilityHint(hint)
         case .select(let choices, let selected):

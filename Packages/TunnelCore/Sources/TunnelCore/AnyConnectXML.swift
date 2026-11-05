@@ -263,6 +263,31 @@ public struct AuthForm: Equatable, Sendable {
     /// Where the answer goes, if not the current URL.
     public let action: String?
     public let fields: [AuthField]
+
+    /// Words a gateway uses when it wants a one-time code rather than the account password.
+    /// "Duo" alone isn't one: ASA forms say it next to the password field of the first step.
+    private static var codeWords: Regex<(Substring, Substring)> { #/(?i)\b(otp|one[- ]time|passcode|verification code|security code|token code|authenticator)\b/# }
+
+    /// Whether `field` asks for a one-time code. Gateways often label that field "Password" and
+    /// say what they want only in the message (ocserv: "Please enter your OTP password."), so
+    /// the message counts when the form has nothing else to fill in (user, 2026-11-05: "it's not
+    /// clear when it's asking for Password and when for OTP").
+    public func asksForCode(_ field: AuthField, message: String?) -> Bool {
+        guard field.kind == .password else { return false }
+        if field.secondAuth || field.name == "answer" || fields.contains(where: { $0.name == "answer" }) { return true }
+        let others = fields.filter { $0.name != field.name && ($0.kind == .text || $0.kind == .password) }
+        guard others.isEmpty, let message else { return false }
+        return message.contains(Self.codeWords)
+    }
+
+    /// The label to show for `field`: the gateway's own, unless it is a bare "Password" (or
+    /// missing) on a field that asks for a one-time code.
+    public func label(for field: AuthField, message: String?) -> String {
+        let given = field.label.trimmingCharacters(in: CharacterSet(charactersIn: ": "))
+        let code = asksForCode(field, message: message)
+        if code, given.isEmpty || given.caseInsensitiveCompare("password") == .orderedSame { return "One-time code" }
+        return given.isEmpty ? (field.secondAuth ? "Passcode" : field.name.capitalized) : given
+    }
 }
 
 /// The gateway asks for SAML/SSO in a browser.
