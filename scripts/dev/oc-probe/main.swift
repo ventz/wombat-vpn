@@ -7,6 +7,7 @@ import CryptoKit
 import Foundation
 import Security
 
+setvbuf(stdout, nil, _IOLBF, 0)  // line by line, so a watcher can react to engine lines
 let root = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : FileManager.default.currentDirectoryPath)
 let envText = (try? String(contentsOf: root.appendingPathComponent("build/ocserv-peer/test.env"), encoding: .utf8)) ?? ""
 var env: [String: String] = [:]
@@ -138,6 +139,39 @@ Task {
         let exited = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var exitReason: String? = "not exited"
         try engine.start(tunnelFD: pair[0]) { reason in exitReason = reason; exited.signal() }
+        // OCPROBE_PING=1: echo requests of several sizes to the gateway's tunnel address
+        // (10.98.0.1) through the socket pair, after DTLS and its MTU detection settle. Shows
+        // which packet sizes the tunnel really carries (MTU A/B test, 2026-11-10).
+        if ProcessInfo.processInfo.environment["OCPROBE_PING"] == "1", let source = info.address {
+            Thread.sleep(forTimeInterval: 8)
+            print("transport before pings: \(engine.transport)")
+            var timeout = timeval(tv_sec: 2, tv_usec: 0)
+            setsockopt(pair[1], SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+            for (index, size) in [84, 500, 576, 600, 1000, 1300].enumerated() {
+                var replies = 0
+                for seq in 0..<3 {
+                    // libopenconnect's macOS tun I/O carries a 4-byte address family first.
+                    let packet = [0, 0, 0, UInt8(AF_INET)] + echoRequest(from: source, to: "10.98.0.1", totalLength: size, id: UInt16(index), seq: UInt16(seq))
+                    _ = packet.withUnsafeBytes { write(pair[1], $0.baseAddress, packet.count) }
+                    // Skip anything else the gateway sends (IPv6 router traffic, earlier replies).
+                    let deadline = Date().addingTimeInterval(2)
+                    var buffer = [UInt8](repeating: 0, count: 2048)
+                    while Date() < deadline {
+                        let n = read(pair[1], &buffer, buffer.count) - 4
+                        guard n > 0 else { break }
+                        if n >= 28, buffer[4] >> 4 == 4, buffer[4 + 9] == 1, buffer[4 + 20] == 0,
+                           buffer[4 + 24] == UInt8(index >> 8), buffer[4 + 25] == UInt8(index & 0xff), buffer[4 + 27] == UInt8(seq & 0xff) {
+                            if n == size { replies += 1 }
+                            break
+                        }
+                    }
+                }
+                print("ping \(size) bytes: \(replies)/3 replies")
+            }
+            engine.stop()
+            _ = exited.wait(timeout: .now() + 10)
+            exit(0)
+        }
         Thread.sleep(forTimeInterval: 2)
         engine.reconnectNow()
         Thread.sleep(forTimeInterval: 4)
@@ -213,4 +247,34 @@ final class Collected: @unchecked Sendable {
         for (before, after) in changed { print("  scrubbed: \(after)  [was \(before.count) chars]") }
         if !leaks.isEmpty { print("oc-probe: FAILED: a secret survived the scrubber"); exit(1) }
     }
+}
+
+/// An IPv4 ICMP echo request of exactly `totalLength` bytes (OCPROBE_PING).
+func echoRequest(from source: String, to destination: String, totalLength: Int, id: UInt16, seq: UInt16) -> [UInt8] {
+    func checksum(_ bytes: ArraySlice<UInt8>) -> UInt16 {
+        var sum: UInt32 = 0
+        var i = bytes.startIndex
+        while i < bytes.endIndex {
+            let hi = UInt32(bytes[i]) << 8
+            let lo = i + 1 < bytes.endIndex ? UInt32(bytes[i + 1]) : 0
+            sum += hi | lo
+            i += 2
+        }
+        while sum >> 16 != 0 { sum = (sum & 0xffff) + (sum >> 16) }
+        return ~UInt16(sum)
+    }
+    var p = [UInt8](repeating: 0, count: totalLength)
+    p[0] = 0x45
+    p[2] = UInt8(totalLength >> 8); p[3] = UInt8(totalLength & 0xff)
+    p[6] = 0x40  // DF
+    p[8] = 64; p[9] = 1
+    var addr = in_addr()
+    inet_pton(AF_INET, source, &addr); withUnsafeBytes(of: addr.s_addr) { for (k, b) in $0.enumerated() { p[12 + k] = b } }
+    inet_pton(AF_INET, destination, &addr); withUnsafeBytes(of: addr.s_addr) { for (k, b) in $0.enumerated() { p[16 + k] = b } }
+    let ipSum = checksum(p[0..<20]); p[10] = UInt8(ipSum >> 8); p[11] = UInt8(ipSum & 0xff)
+    p[20] = 8
+    p[24] = UInt8(id >> 8); p[25] = UInt8(id & 0xff); p[26] = UInt8(seq >> 8); p[27] = UInt8(seq & 0xff)
+    for k in 28..<totalLength { p[k] = UInt8(k & 0xff) }
+    let icmpSum = checksum(p[20...]); p[22] = UInt8(icmpSum >> 8); p[23] = UInt8(icmpSum & 0xff)
+    return p
 }
