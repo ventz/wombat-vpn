@@ -232,6 +232,10 @@ if [[ $install -eq 1 ]]; then
     osascript -e 'quit app "Wombat"' >/dev/null 2>&1 || true
     command rm -rf /Applications/Wombat.app
     ditto "$app" /Applications/Wombat.app
+    # Something else can write the bundle while it's copied (2026-11-10: build 42 files, likely
+    # a Sparkle install-on-quit, mixed into build 43, and launchd refused it). Check, don't launch.
+    codesign --verify --deep --strict /Applications/Wombat.app \
+        || { echo "build-signed.sh: the installed copy fails its signature check; quit Wombat and rerun with --install" >&2; exit 1; }
     open /Applications/Wombat.app
 fi
 
