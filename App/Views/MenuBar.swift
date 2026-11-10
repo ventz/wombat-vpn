@@ -139,13 +139,35 @@ struct MenuBarContent: View {
 private struct MenuTunnelRow: View {
     @ObservedObject var tunnel: Tunnel
     @EnvironmentObject private var store: TunnelStore
+    @ObservedObject private var signIn = SignInCoordinator.shared
+    @Environment(\.openWindow) private var openWindow
+
+    /// A sign-in for this VPN waits on the user: said in red under its name, and a click brings
+    /// it back (user, 2026-11-10: connecting from the menu bar left it out of sight).
+    private var waitingForSignIn: Bool { signIn.activeTunnelID == tunnel.id }
 
     var body: some View {
         HStack(spacing: 10) {
-            StatusDot(status: tunnel.status)
+            if waitingForSignIn {
+                Image(systemName: "person.badge.key.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .frame(width: 14)
+                    .accessibilityHidden(true)
+            } else {
+                StatusDot(status: tunnel.status)
+            }
             VStack(alignment: .leading, spacing: 1) {
                 Text(tunnel.name).fontWeight(.medium).lineLimit(1)
-                Text(detail).font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                if waitingForSignIn {
+                    Button(action: showSignIn) {
+                        Text(signInText).font(.caption.weight(.semibold)).foregroundStyle(.red).lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show the sign-in")
+                } else {
+                    Text(detail).font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                }
             }
             Spacer()
             // The visible name is the toggle's label; status stays visible text.
@@ -162,9 +184,21 @@ private struct MenuTunnelRow: View {
         .accessibilityValue(spokenDetail)
         .accessibilityAddTraits(.isToggle)
         .accessibilityAction { Task { await store.toggle(tunnel) } }
+        .accessibilityAction(named: "Show Sign-In") { if waitingForSignIn { showSignIn() } }
+    }
+
+    private var signInText: String {
+        if case .browser = signIn.step { return "Sign in in your browser · Show" }
+        return "Waiting for you to sign in · Show"
+    }
+
+    private func showSignIn() {
+        openWindow(id: "main")
+        signIn.showPanel()
     }
 
     private var spokenDetail: String {
+        if waitingForSignIn { return "Waiting for you to sign in" }
         guard tunnel.status == .connected, let stats = tunnel.stats else { return tunnel.statusText }
         if let oc = stats.openConnect {
             return "Connected, received \(Format.bytes(stats.rxBytes)), sent \(Format.bytes(stats.txBytes)), over \(oc.transport ?? "TLS")"

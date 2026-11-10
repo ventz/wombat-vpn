@@ -46,12 +46,32 @@ final class BrowserSignIn: @unchecked Sendable {
 
     init(request: SSORequest, accepts: @escaping @Sendable (Data) -> Bool = { _ in true },
          timeout: DispatchTimeInterval = .seconds(timeoutMinutes * 60),
-         open: @escaping @Sendable (URL) -> Void = { url in DispatchQueue.main.async { NSWorkspace.shared.open(url) } }) {
+         open: @escaping @Sendable (URL) -> Void = { url in DispatchQueue.main.async { MainActor.assumeIsolated { openInFront(url) } } }) {
         self.open = open
         self.timeout = timeout
         self.accepts = accepts
         self.request = request
         gatewayHost = URL(string: request.finalURL)?.host?.lowercased()
+    }
+
+    /// Opens the login page with the browser in front. Since macOS 14 activation is cooperative:
+    /// a plain `open` from Wombat (often in the background, no Dock icon) loaded the page in a
+    /// browser window that stayed behind, and the user waited on "Open Sign-In Page Again"
+    /// (2026-11-10: the first launch at 12:31:33, the click 9 s later). Yielding first lets the
+    /// browser take focus; without a browser for the URL it falls back to a plain open.
+    @MainActor
+    static func openInFront(_ url: URL) {
+        let workspace = NSWorkspace.shared
+        guard let browser = workspace.urlForApplication(toOpen: url) else {
+            workspace.open(url)
+            return
+        }
+        if let id = Bundle(url: browser)?.bundleIdentifier {
+            NSApp.yieldActivation(toApplicationWithBundleIdentifier: id)
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        workspace.open([url], withApplicationAt: browser, configuration: configuration)
     }
 
     static let timeoutMinutes = 10
