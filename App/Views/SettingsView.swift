@@ -26,6 +26,7 @@ private struct GeneralSettings: View {
     @AppStorage(Preferences.Key.showInMenuBar) private var showInMenuBar = true
     @AppStorage(Preferences.Key.menuBarShowsName) private var menuBarShowsName = false
     @AppStorage(Preferences.Key.menuBarIcon) private var menuBarIcon = "shield"
+    @AppStorage(Preferences.Key.menuBarColored) private var menuBarColored = true
     @AppStorage(Preferences.Key.confirmQuit) private var confirmQuit = true
     @AppStorage(Preferences.Key.openWindowAtLaunch) private var openWindowAtLaunch = true
     @AppStorage(Preferences.Key.notifyOnChange) private var notifyOnChange = false
@@ -65,6 +66,8 @@ private struct GeneralSettings: View {
                     Text("Wombat W").tag("w")
                 }
                 .disabled(!showInMenuBar)
+                Toggle("Color the menu bar icon (green when connected, red when not)", isOn: $menuBarColored)
+                    .disabled(!showInMenuBar)
                 Toggle("Show the connected tunnel's name in the menu bar", isOn: $menuBarShowsName)
                     .disabled(!showInMenuBar)
             } header: {

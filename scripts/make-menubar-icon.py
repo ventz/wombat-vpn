@@ -6,14 +6,14 @@ saturated red. The template keeps the ribbon's shading as alpha, so the folds of
 readable at 18 pt; macOS tints a template image to match the menu bar.
 
     scripts/make-menubar-icon.py assets/icon-source.png Resources/MenuBarW
-    -> Resources/MenuBarW.png (18 pt tall) and Resources/MenuBarW@2x.png
+    -> Resources/MenuBarW.png (22 pt tall) and Resources/MenuBarW@2x.png
 """
 import sys
 
 import numpy as np
 from PIL import Image
 
-HEIGHT_PT = 16      # the glyph; the menu bar is 22-24 pt tall
+HEIGHT_PT = 22      # the glyph; the menu bar is 22-24 pt tall
 MIN_ALPHA = 0.55    # darkest fold vs the brightest ribbon face
 
 source, destination = sys.argv[1], sys.argv[2]

@@ -17,47 +17,150 @@ enum TunnelSymbol {
     }
 }
 
-/// The app's ribbon "W" as a menu bar template (Resources/MenuBarW, from
-/// scripts/make-menubar-icon.py): solid when connected, dimmed otherwise (the usual macOS
-/// convention for an inactive status item). Dimming alone is too faint a cue, so every state
-/// but connected also has a badge shape (accessibility-3 M5): "…" changing, "−" off, "!" error.
-/// The image carries its state as its accessibility description (M6).
+/// Menu bar state shared by both icon styles.
+private enum MenuBarState {
+    case connected, changing, off, error
+
+    init(_ status: NEVPNStatus?, error: Bool) {
+        switch status {
+        case .connected: self = .connected
+        case .connecting, .reasserting, .disconnecting: self = .changing
+        default: self = error ? .error : .off
+        }
+    }
+
+    var color: NSColor {
+        switch self {
+        case .connected: .systemGreen
+        case .changing: .systemOrange
+        case .off, .error: .systemRed
+        }
+    }
+
+    var spoken: String {
+        switch self {
+        case .connected: "connected"
+        case .changing: "changing"
+        case .off: "not connected"
+        case .error: "error"
+        }
+    }
+}
+
+/// The menu bar size of both marks: about as tall as the neighbors' icons (Calendar, Slack),
+/// not the 13 pt SwiftUI gives a bare `Image(systemName:)` in a MenuBarExtra (user,
+/// 2026-11-10: "too small").
+private enum MenuBarMetrics {
+    static let symbolPointSize: CGFloat = 20
+    static let markHeight: CGFloat = 22
+}
+
+/// The shield status item. Colored (the default): a white lock on a green shield when
+/// connected, a white open lock on a red shield when not, an orange half shield while changing,
+/// a white "!" on red for an error. The shapes still differ without color (color-blind users,
+/// the monochrome option), as `TunnelSymbol` describes.
+@MainActor
+enum ShieldMark {
+    private static var cache: [String: NSImage] = [:]
+
+    static func image(_ status: NEVPNStatus?, error: Bool, colored: Bool) -> NSImage {
+        let state = MenuBarState(status, error: error)
+        let key = "\(state)-\(colored)"
+        if let cached = cache[key] { return cached }
+        let pt = MenuBarMetrics.symbolPointSize
+        // Monochrome (a template) uses the symbols' own rendering, where the lock and "!" are
+        // cut out; colored paints them white on the state's color.
+        let colors: (NSColor) -> [NSColor]? = { colored ? [.white, $0] : nil }
+        let image: NSImage
+        switch state {
+        case .connected: image = symbol("lock.shield.fill", pt, colors(state.color))
+        case .changing: image = symbol("shield.lefthalf.filled", pt, colored ? [state.color] : nil)
+        case .error: image = symbol("exclamationmark.shield.fill", pt, colors(state.color))
+        case .off:
+            // No "lock.open.shield" symbol exists: an open lock drawn on a filled shield.
+            let shield = symbol("shield.fill", pt, colored ? [state.color] : nil)
+            let lock = symbol("lock.open.fill", pt * 0.5, colored ? [.white] : nil, weight: .bold)
+            let size = shield.size
+            image = NSImage(size: size, flipped: false) { _ in
+                shield.draw(in: NSRect(origin: .zero, size: size))
+                let l = lock.size
+                let rect = NSRect(x: (size.width - l.width) / 2 + 1, y: (size.height - l.height) / 2 - 0.5,
+                                  width: l.width, height: l.height)
+                lock.draw(in: rect, from: .zero, operation: colored ? .sourceOver : .destinationOut, fraction: 1)
+                return true
+            }
+        }
+        let result = NSImage(size: image.size, flipped: false) { rect in
+            image.draw(in: rect)
+            return true
+        }
+        result.isTemplate = !colored
+        result.accessibilityDescription = "Wombat, \(state.spoken)"
+        cache[key] = result
+        return result
+    }
+
+    private static func symbol(_ name: String, _ pointSize: CGFloat, _ colors: [NSColor]?,
+                               weight: NSFont.Weight = .medium) -> NSImage {
+        var config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
+        if let colors { config = config.applying(.init(paletteColors: colors)) }
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) ?? NSImage()
+    }
+}
+
+/// The app's ribbon "W" in the menu bar (Resources/MenuBarW, from scripts/make-menubar-icon.py),
+/// tinted by state when colored; as a template, solid when connected and dimmed otherwise (the
+/// usual macOS convention for an inactive status item). Every state but connected also has a
+/// badge shape (accessibility-3 M5): "…" changing, "−" off, "!" error. The image carries its
+/// state as its accessibility description (M6).
 @MainActor
 enum WombatMark {
     private static var cache: [String: NSImage] = [:]
 
-    static func image(_ status: NEVPNStatus?, error: Bool) -> NSImage {
-        let alpha: CGFloat
-        switch status {
-        case .connected: alpha = 1
-        case .connecting, .reasserting, .disconnecting: alpha = 0.65
-        default: alpha = 0.4
-        }
-        let badge: String? = switch status {
-        case .connected: nil
-        case .connecting, .reasserting, .disconnecting: "ellipsis.circle.fill"
-        default: error ? "exclamationmark.circle.fill" : "minus.circle.fill"
-        }
-        let state = switch status {
-        case .connected: "connected"
-        case .connecting, .reasserting, .disconnecting: "changing"
-        default: error ? "error" : "not connected"
-        }
-        let key = "\(alpha)-\(badge ?? "")"
+    static func image(_ status: NEVPNStatus?, error: Bool, colored: Bool) -> NSImage {
+        let state = MenuBarState(status, error: error)
+        let key = "\(state)-\(colored)"
         if let cached = cache[key] { return cached }
+        let alpha: CGFloat = switch state {
+        case .connected: 1
+        case .changing: colored ? 1 : 0.65
+        case .off, .error: colored ? 1 : 0.4
+        }
+        let badge: String? = switch state {
+        case .connected: nil
+        case .changing: "ellipsis.circle.fill"
+        case .off: "minus.circle.fill"
+        case .error: "exclamationmark.circle.fill"
+        }
         guard let mark = NSImage(named: "MenuBarW") else { return NSImage() }
-        let size = NSSize(width: mark.size.width + (badge != nil ? 5 : 0), height: max(mark.size.height, 16))
+        let h = MenuBarMetrics.markHeight
+        let markSize = NSSize(width: mark.size.width * h / mark.size.height, height: h)
+        let badgeSide: CGFloat = 10
+        let size = NSSize(width: markSize.width + (badge != nil ? 5 : 0), height: h)
+        let tint = state.color
         let image = NSImage(size: size, flipped: false) { _ in
-            mark.draw(in: NSRect(x: 0, y: (size.height - mark.size.height) / 2, width: mark.size.width, height: mark.size.height),
-                      from: .zero, operation: .sourceOver, fraction: alpha)
-            if let badge, let bang = NSImage(systemSymbolName: badge, accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 9, weight: .bold)) {
-                bang.draw(in: NSRect(x: size.width - 9, y: 0, width: 9, height: 9))
+            let markRect = NSRect(origin: .zero, size: markSize)
+            mark.draw(in: markRect, from: .zero, operation: .sourceOver, fraction: alpha)
+            if colored {
+                // Keeps the ribbon's shading (its alpha) and swaps its color for the state's.
+                tint.set()
+                markRect.fill(using: .sourceAtop)
+            }
+            let badgeConfig = NSImage.SymbolConfiguration(pointSize: badgeSide, weight: .bold)
+            if let badge, let symbol = NSImage(systemSymbolName: badge, accessibilityDescription: nil)?
+                .withSymbolConfiguration(colored ? badgeConfig.applying(.init(paletteColors: [.white, tint])) : badgeConfig) {
+                let rect = NSRect(x: size.width - badgeSide, y: 0, width: badgeSide, height: badgeSide)
+                // A clear ring separates the badge from the W behind it.
+                NSGraphicsContext.current?.compositingOperation = .clear
+                NSBezierPath(ovalIn: rect.insetBy(dx: -1, dy: -1)).fill()
+                NSGraphicsContext.current?.compositingOperation = .sourceOver
+                symbol.draw(in: rect)
             }
             return true
         }
-        image.isTemplate = true
-        image.accessibilityDescription = "Wombat, \(state)"
+        image.isTemplate = !colored
+        image.accessibilityDescription = "Wombat, \(state.spoken)"
         cache[key] = image
         return image
     }
@@ -68,6 +171,7 @@ struct MenuBarLabel: View {
     @ObservedObject var store: TunnelStore
     @AppStorage(Preferences.Key.menuBarShowsName) private var showsName = false
     @AppStorage(Preferences.Key.menuBarIcon) private var icon = "shield"
+    @AppStorage(Preferences.Key.menuBarColored) private var colored = true
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -76,9 +180,9 @@ struct MenuBarLabel: View {
         // TunnelStore announces connection changes centrally (no second announcement here).
         HStack(spacing: 4) {
             if icon == "w" {
-                Image(nsImage: WombatMark.image(active?.status, error: failed != nil))
+                Image(nsImage: WombatMark.image(active?.status, error: failed != nil, colored: colored))
             } else {
-                Image(systemName: TunnelSymbol.name(active?.status, error: failed != nil))
+                Image(nsImage: ShieldMark.image(active?.status, error: failed != nil, colored: colored))
             }
             if showsName, let active { Text(active.name) }
         }

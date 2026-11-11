@@ -12,6 +12,8 @@ enum Preferences {
         static let menuBarShowsName = "menuBarShowsName"
         /// "shield" (status symbols, the default) or "w" (the app's ribbon W, dimmed when off).
         static let menuBarIcon = "menuBarIcon"
+        /// Green when connected, red when not, orange while changing; off = the menu bar's own tint.
+        static let menuBarColored = "menuBarColored"
         static let openWindowAtLaunch = "openWindowAtLaunch"
         static let notifyOnChange = "notifyOnChange"
         static let confirmQuit = "confirmQuit"
@@ -25,6 +27,7 @@ enum Preferences {
             Key.showInMenuBar: true,
             Key.menuBarShowsName: false,
             Key.menuBarIcon: "shield",
+            Key.menuBarColored: true,
             Key.openWindowAtLaunch: true,
             Key.notifyOnChange: false,
             Key.confirmQuit: true,
