@@ -24,7 +24,7 @@ go_runtime_prepare() {
     # The exact toolchain release: the compiler builds code that runs as root, so a new one is a
     # deliberate bump (audit F-16; security-9-astra S9-6). WOMBAT_GO_VERSION overrides for
     # testing a new release. The build prints the toolchain's own checksum for the record.
-    local expected="${WOMBAT_GO_VERSION:-go1.27.3}"
+    local expected="${WOMBAT_GO_VERSION:-go1.27.4}"
     [[ "$GO_VERSION" == "$expected" ]] \
         || { echo "$tag: Go $GO_VERSION, expected $expected (set WOMBAT_GO_VERSION to try another)" >&2; return 1; }
     SDK="$(xcrun --sdk macosx --show-sdk-path)"
