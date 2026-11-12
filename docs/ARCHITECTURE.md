@@ -194,6 +194,13 @@ AnyConnect VPNs are a second engine with the same rules, in a separate process
   `enforceRoutes`, for WireGuard split tunnels only: `enforceRoutes` doesn't apply to default
   routes (Apple, developer forums thread 832079), and an AnyConnect gateway picks its own routes.
   Full tunnels and AnyConnect leave local subnets to the routing table's more specific routes.
+  `excludeLocalNetworks` covers unicast only: with the kill switch on, multicast stays on the
+  tunnel (a send forced onto Wi-Fi fails with "Network is unreachable"), so Bonjour discovery
+  (AirPlay, network printers) breaks. "Allow device discovery", a sub-setting of the kill switch
+  that needs "Allow local network" and is off by default, adds excluded routes for the mDNS
+  groups only (224.0.0.251/32, ff02::fb/128), never all of 224.0.0.0/4. It is stored as
+  `ld` in providerConfiguration, and each extension checks the kill switch and local network
+  again before it applies it.
 - **DNS:** with DNS servers set, all lookups go to them (`matchDomains = [""]`). The review warns
   when a full tunnel sets no DNS, or when a DNS server is outside AllowedIPs.
 - **Endpoint lookups under the kill switch:** with `includeAllNetworks`, macOS blocks the system
@@ -216,7 +223,7 @@ also Developer ID signed and notarized. The sandboxed app downloads and installs
 XPC services. (The app's outgoing-network entitlement is for looking up endpoint hostnames
 before a kill-switch tunnel starts; the sandbox blocks DNS without it.) The version text from the feed is
 treated as untrusted (control and bidi characters removed, length capped) before it is shown.
-Settings › General › Updates chooses between the update window, only a dot on the Settings
+Settings › Updates chooses between the update window, only a dot on the Settings
 button, or no checks.
 
 ## Untrusted input

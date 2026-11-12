@@ -252,13 +252,17 @@ final class ControlHandler {
                     try await store.setOnDemand(t, rules)
                 } else {
                     guard let protection = request.protection else { return .failure("No protection settings given") }
-                    let current = Control.Protection(proto: t.proto)
+                    let current = Control.Protection(proto: t.proto).effective
+                    let wanted = protection.effective
                     if current.killSwitch && !protection.killSwitch {
                         guard await authenticate(reason: "turn off the kill switch for “\(t.name)” (asked by the wombat command)") else {
                             return declinedFailure(nil)
                         }
                     } else if !current.allowLAN, protection.allowLAN,
-                              !confirm(title: "Allow the local network for “\(t.name)”?", detail: "The wombat command asked to let local-network traffic bypass the tunnel.", action: "Allow") {
+                              !confirm(title: "Allow the local network for “\(t.name)”?", detail: "The wombat command asked to let local-network traffic bypass the tunnel\(wanted.allowDiscovery ? ", including Bonjour discovery (AirPlay, printers)" : "").", action: "Allow") {
+                        return declinedFailure("Change")
+                    } else if current.allowLAN, !current.allowDiscovery, wanted.allowDiscovery,
+                              !confirm(title: "Allow device discovery for “\(t.name)”?", detail: "The wombat command asked to let Bonjour discovery (AirPlay, printers) bypass the kill switch. Devices on this network can then see this Mac's Bonjour services and answer as AirPlay targets.", action: "Allow") {
                         return declinedFailure("Change")
                     }
                     try await store.setProtection(t, protection)

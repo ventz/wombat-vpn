@@ -44,7 +44,7 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Key.confirmQuit) }
     }
 
-    /// Debug logging (Settings › General › Troubleshooting): more engine detail in the Log tab, for a
+    /// Debug logging (Settings › Troubleshooting): more engine detail in the Log tab, for a
     /// problem report. It turns itself off after a day, so a Mac doesn't keep a verbose log
     /// forever because someone forgot a switch.
     static let debugLoggingHours = DebugLoggingDeadline.hours

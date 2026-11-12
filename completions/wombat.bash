@@ -84,7 +84,7 @@ _wombat() {
             import) flags="--name --json" ;;
             export) flags="--with-keys" ;;
             ondemand) flags="--wifi --no-wifi --ethernet --no-ethernet --json" ;;
-            killswitch) flags="--allow-lan" ;;
+            killswitch) flags="--allow-lan --allow-discovery" ;;
             logs) flags="-f --follow --last" ;;
             diagnostics) flags="--hide-servers -o --output --last" ;;
             check | lint) flags="--strict --json" ;;

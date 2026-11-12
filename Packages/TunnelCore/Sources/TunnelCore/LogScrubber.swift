@@ -94,7 +94,7 @@ public enum LogScrubber {
     }
 }
 
-/// Debug logging's deadline (Settings › General › Troubleshooting). Stored as seconds since
+/// Debug logging's deadline (Settings › Troubleshooting). Stored as seconds since
 /// 1970; a stored value more than a day ahead (a hand-edited default, a clock set back) counts
 /// as a day from now, so it can never stay on for longer.
 public enum DebugLoggingDeadline {

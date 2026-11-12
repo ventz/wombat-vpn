@@ -78,12 +78,32 @@ public enum Control {
     public struct Protection: Codable, Equatable, Sendable {
         /// Kill switch: all traffic goes through the tunnel, and none flows while it is down.
         public var killSwitch: Bool
-        /// With the kill switch on, still allow the local network (printers, AirPlay).
+        /// With the kill switch on, still allow unicast to the local network (a NAS or printer by IP).
+        /// macOS keeps holding multicast, so Bonjour discovery needs `allowDiscovery` too (issue #2).
         public var allowLAN: Bool
+        /// Kill switch exception for Bonjour (mDNS) so AirPlay and other local devices can be
+        /// discovered. Only takes effect with `killSwitch` and `allowLAN` (issue #2).
+        public var allowDiscovery: Bool
 
-        public init(killSwitch: Bool, allowLAN: Bool) {
+        public init(killSwitch: Bool, allowLAN: Bool, allowDiscovery: Bool = false) {
             self.killSwitch = killSwitch
             self.allowLAN = allowLAN
+            self.allowDiscovery = allowDiscovery
+        }
+
+        /// What actually applies: discovery is a sub-setting of kill switch + local network.
+        public var effective: Protection {
+            Protection(killSwitch: killSwitch, allowLAN: allowLAN, allowDiscovery: killSwitch && allowLAN && allowDiscovery)
+        }
+
+        private enum CodingKeys: String, CodingKey { case killSwitch, allowLAN, allowDiscovery }
+
+        // A peer from before 1.4.5 sends no allowDiscovery: that means off (the safer value).
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            killSwitch = try c.decode(Bool.self, forKey: .killSwitch)
+            allowLAN = try c.decode(Bool.self, forKey: .allowLAN)
+            allowDiscovery = try c.decodeIfPresent(Bool.self, forKey: .allowDiscovery) ?? false
         }
     }
 

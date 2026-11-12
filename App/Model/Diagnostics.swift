@@ -111,7 +111,7 @@ enum Diagnostics {
         out.append("  Status: \(t.statusText)\(t.connectedSince.map { ", since \(ISO8601DateFormatter().string(from: $0))" } ?? "")")
         if let error = t.lastError { out.append("  Last error: \(error)") }
         let protection = Control.Protection(proto: t.proto)
-        out.append("  On demand: \(t.hasOnDemandSetting ? "on" : "off"); kill switch: \(protection.killSwitch ? "on" : "off"); local network: \(protection.allowLAN ? "allowed" : "blocked")")
+        out.append("  On demand: \(t.hasOnDemandSetting ? "on" : "off"); kill switch: \(protection.killSwitch ? "on" : "off"); local network: \(protection.allowLAN ? "allowed" : "blocked"); discovery: \(protection.effective.allowDiscovery ? "allowed" : "blocked")")
         if t.isOpenConnect, let p = t.profile {
             out.append("  Gateway: \(p.displayServer)\(p.server.path.isEmpty || p.server.path == "/" ? "" : " (group URL \(hideServers ? "set" : p.server.path))")")
             out.append("  Group: \(p.group == nil ? "not set" : "set"); user name: \(p.username == nil ? "not set" : "set"); client certificate: \(p.clientCertificate == nil ? "no" : "yes")")

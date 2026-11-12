@@ -2,21 +2,32 @@ import ServiceManagement
 import SwiftUI
 import TunnelCore
 
+enum SettingsTab: String, CaseIterable {
+    case general, updates, troubleshooting, commandLine, about
+}
+
 struct SettingsView: View {
+    @State private var tab = SettingsTab.general
+
     var body: some View {
-        TabView {
-            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
-            CommandLineSettings().tabItem { Label("Command Line", systemImage: "terminal") }
-            AboutSettings().tabItem { Label("About", systemImage: "info.circle") }
+        TabView(selection: $tab) {
+            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }.tag(SettingsTab.general)
+            UpdatesSettings().tabItem { Label("Updates", systemImage: "arrow.down.circle") }.tag(SettingsTab.updates)
+            TroubleshootingSettings().tabItem { Label("Troubleshooting", systemImage: "stethoscope") }.tag(SettingsTab.troubleshooting)
+            CommandLineSettings().tabItem { Label("Command Line", systemImage: "terminal") }.tag(SettingsTab.commandLine)
+            AboutSettings().tabItem { Label("About", systemImage: "info.circle") }.tag(SettingsTab.about)
         }
         .frame(width: 580, height: 560)
+        #if DEBUG
+        // Demo captures (DemoMode) switch tabs.
+        .onReceive(NotificationCenter.default.publisher(for: DemoMode.settingsTabNotification)) { note in
+            if let next = note.object as? SettingsTab { tab = next }
+        }
+        #endif
     }
 }
 
 private struct GeneralSettings: View {
-    @EnvironmentObject private var installer: ExtensionInstaller
-    @EnvironmentObject private var openConnectInstaller: OpenConnectInstaller
-    @EnvironmentObject private var store: TunnelStore
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     /// Set while the switch is put back after a failure, so that change isn't acted on (and the
     /// error it explains isn't cleared by it; quality-3).
@@ -94,8 +105,29 @@ private struct GeneralSettings: View {
                         }
                     }
             }
-            UpdatesSection()
-            TroubleshootingSection()
+            if let error { ErrorLabel(error) }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// Updates on their own tab (user, 2026-11-12: out of General, not shared with troubleshooting).
+private struct UpdatesSettings: View {
+    var body: some View {
+        Form { UpdatesSection() }
+            .formStyle(.grouped)
+    }
+}
+
+/// The network extensions, debug logging and Save Diagnostics: everything for fixing a problem
+/// (user, 2026-11-12: its own tab, out of General).
+private struct TroubleshootingSettings: View {
+    @EnvironmentObject private var installer: ExtensionInstaller
+    @EnvironmentObject private var openConnectInstaller: OpenConnectInstaller
+    @EnvironmentObject private var store: TunnelStore
+
+    var body: some View {
+        Form {
             Section("Network extensions") {
                 LabeledContent("WireGuard", value: Self.statusText(installer.state))
                 Button("Reinstall WireGuard Extension") { installer.activate() }
@@ -109,7 +141,7 @@ private struct GeneralSettings: View {
                         .help("Opens Network Extensions in System Settings, where Wombat's extensions are turned on")
                 }
             }
-            if let error { ErrorLabel(error) }
+            DiagnosticsSection()
         }
         .formStyle(.grouped)
     }
@@ -127,7 +159,7 @@ private struct GeneralSettings: View {
 }
 
 /// Debug logging and Save Diagnostics, for problem reports (issue #1, 2026-11-05).
-private struct TroubleshootingSection: View {
+private struct DiagnosticsSection: View {
     @EnvironmentObject private var store: TunnelStore
     /// Observed so the section redraws when the switch (or the banner's Turn Off) changes it.
     @AppStorage(Preferences.Key.debugLoggingUntil) private var until: Double = 0
@@ -147,7 +179,7 @@ private struct TroubleshootingSection: View {
             Button("Save Diagnostics…") { Diagnostics.save(store) }
                 .help("Saves versions, extension states, each VPN's settings and its last log to a text file, without keys, passwords or session cookies")
         } header: {
-            Text("Troubleshooting")
+            Text("Diagnostics")
         } footer: {
             Text("Debug logging applies from the next connect: AnyConnect VPNs log every header and keepalive, and every tunnel keeps a longer log in its Log tab. It turns itself off after \(Preferences.debugLoggingHours) hours, and a connection made with it stops adding detail then. Logs never include keys, passwords or session cookies, and the kept log is gone when Wombat quits. Save Diagnostics makes a file to attach to a problem report.")
         }
@@ -164,7 +196,7 @@ private struct UpdatesSection: View {
     @ObservedObject private var updates = UpdaterModel.shared
 
     var body: some View {
-        Section("Updates") {
+        Section {
             if updates.updatesEnabled {
                 Picker("When a new version is out", selection: Binding(get: { updates.alertMode }, set: { updates.setAlertMode($0) })) {
                     ForEach(UpdateAlertMode.allCases) { Text($0.title).tag($0) }

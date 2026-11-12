@@ -76,17 +76,39 @@ struct ConnectionTab: View {
 
             Section {
                 Toggle("Kill switch", isOn: $protection.killSwitch)
-                Toggle("Allow local network", isOn: $protection.allowLAN)
+                Toggle("Allow local network", isOn: Binding(get: { protection.allowLAN }, set: { on in
+                    protection.allowLAN = on
+                    if !on { protection.allowDiscovery = false }  // never "on" while it can't apply
+                }))
                     .disabled(!protection.killSwitch && !tunnel.canAllowLANWithoutKillSwitch)
+                // Kill switch exception for Bonjour (issue #2): off by default, and shown only once
+                // the local network is allowed (discovery is useless if the devices can't be
+                // reached). Hidden rather than dimmed, so there is no unexplained disabled switch
+                // (accessibility-11 M2).
+                if protection.killSwitch && protection.allowLAN {
+                    Toggle("Allow device discovery (AirPlay, printers)", isOn: $protection.allowDiscovery)
+                        .padding(.leading, 20)
+                        .accessibilityHint("Part of Allow local network.")
+                }
             } header: {
                 Text("Protection")
             } footer: {
                 if !protection.killSwitch && !tunnel.canAllowLANWithoutKillSwitch {
                     Text("Without the kill switch, macOS sends traffic for your local network outside the tunnel unless the tunnel routes that network itself. This switch takes effect with the kill switch on.")
                 } else {
-                    Text(protection.allowLAN
-                         ? "Local-network traffic bypasses the tunnel. That keeps printers, AirPlay and file sharing working, but on an untrusted Wi-Fi network it lets the network redirect some traffic (TunnelVision, LocalNet)."
-                         : "With the kill switch on, traffic goes only through the tunnel, also while it reconnects. Allowing the local network keeps printers, AirPlay and file sharing working.")
+                    VStack(alignment: .leading, spacing: 6) {
+                        if tunnel.isActive {
+                            Text("Changes here take effect the next time the tunnel connects.")
+                        }
+                        Text(!protection.allowLAN
+                             ? "With the kill switch on, traffic goes only through the tunnel, also while it reconnects. Allowing the local network reaches local addresses such as a NAS or printer by IP."
+                             : Self.lanRisk)
+                        if protection.killSwitch && protection.allowLAN {
+                            Text(protection.allowDiscovery
+                                 ? Self.discoveryRisk
+                                 : "The kill switch also holds Bonjour discovery, so AirPlay devices and printers don't show up. Allow device discovery to let it through.")
+                        }
+                    }
                 }
             }
 
@@ -106,6 +128,13 @@ struct ConnectionTab: View {
             Task { await apply { try await store.setOnDemand(tunnel, value) } }
         }
         .onChange(of: protection) { old, value in
+            // The footer's risk text changes silently for VoiceOver: say it when a switch turns
+            // on (accessibility-11 M3).
+            if !old.allowLAN, value.allowLAN, value.killSwitch || tunnel.canAllowLANWithoutKillSwitch {
+                AccessibilityNotification.Announcement(Self.lanRisk).post()
+            } else if !old.allowDiscovery, value.allowDiscovery {
+                AccessibilityNotification.Announcement(Self.discoveryRisk).post()
+            }
             guard value != Control.Protection(proto: tunnel.proto) else { return }
             Task {
                 // Turning the kill switch off asks for Touch ID or the password, as from the CLI:
@@ -119,6 +148,9 @@ struct ConnectionTab: View {
             }
         }
     }
+
+    private static let lanRisk = "Traffic to local addresses bypasses the tunnel, so a NAS or printer is reachable by IP, but on an untrusted Wi-Fi network it lets the network redirect some traffic (TunnelVision, LocalNet)."
+    private static let discoveryRisk = "Bonjour discovery also bypasses the kill switch, so AirPlay devices and printers show up. Devices on this network can see this Mac's Bonjour services too."
 
     private func load() {
         rules = Control.OnDemand(manager: tunnel.manager)
@@ -174,8 +206,8 @@ struct LogTab: View {
         VStack(spacing: 0) {
             if lines.isEmpty {
                 ContentUnavailableView("No log yet", systemImage: "text.alignleft",
-                                       description: Text("The tunnel's recent log appears here once it starts, and stays after it stops, until Wombat quits. For more detail, turn on Settings › General › Troubleshooting › Debug logging.")
-                                        .accessibilityLabel("The tunnel's recent log appears here once it starts, and stays after it stops, until Wombat quits. For more detail, turn on Debug logging in Settings, General, under Troubleshooting."))
+                                       description: Text("The tunnel's recent log appears here once it starts, and stays after it stops, until Wombat quits. For more detail, turn on Settings › Troubleshooting › Debug logging.")
+                                        .accessibilityLabel("The tunnel's recent log appears here once it starts, and stays after it stops, until Wombat quits. For more detail, turn on Debug logging in Settings, under Troubleshooting."))
             } else {
                 ScrollViewReader { proxy in
                     List(rows, id: \.id) { row in

@@ -47,7 +47,7 @@ themselves keep running when the app quits, and the offline tools work without i
 | `wombat delete <name>` | Delete the tunnel and its keys; you approve it in the app |
 | `wombat ondemand <name> on\|off [--no-wifi\|--wifi] [--no-ethernet\|--ethernet]` | Connect automatically (WireGuard only: AnyConnect needs a sign-in each time) |
 | `wombat ondemand <name> trust\|untrust <wifi-name>` | Disconnect on (or stop trusting) a Wi-Fi network |
-| `wombat killswitch <name> on\|off [--allow-lan]` | Block traffic outside the tunnel; the local network stays blocked unless `--allow-lan`, which also works with `off` for a split tunnel |
+| `wombat killswitch <name> on\|off [--allow-lan] [--allow-discovery]` | Block traffic outside the tunnel; the local network stays blocked unless `--allow-lan`, which also works with `off` for a split tunnel. `--allow-discovery` (implies `--allow-lan`, kill switch on only) also lets Bonjour discovery out, so AirPlay devices and network printers show up |
 | `wombat log <name>` | Recent log lines from the tunnel's current run, or its last one once it has stopped |
 
 ## Diagnostics
@@ -60,7 +60,7 @@ themselves keep running when the app quits, and the offline tools work without i
 | `wombat doctor` | Checks the install, the extension, the app, the socket, and macOS's VPN daemon |
 | `wombat diagnostics [name] [--hide-servers] [-o FILE] [--last 30m]` | A report to attach to a problem report: versions, extension states, each VPN's settings and last log, and macOS's own VPN session log for these VPNs. No keys, passwords or session cookies; `--hide-servers` also replaces server names, addresses and VPN names. Written 0600 with `-o` |
 
-For a problem that only shows up once, turn on **Settings › General › Troubleshooting › Debug
+For a problem that only shows up once, turn on **Settings › Troubleshooting › Debug
 logging** first (the AnyConnect engine then logs every header and keepalive, secrets removed; it
 turns itself off after 24 hours), reproduce it, then run `wombat diagnostics`. The extensions'
 detailed lines go only to Wombat (the Log tab, `wombat log`, `wombat diagnostics`), never to the

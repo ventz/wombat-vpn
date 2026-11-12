@@ -133,7 +133,8 @@ scripts/build-signed.sh --install
 - **On demand:** connect automatically on Wi-Fi and Ethernet, except on trusted networks.
   Evaluated by macOS, so it works with the app closed.
 - **Kill switch:** route everything through the tunnel, also while it reconnects, with
-  an option to allow the local network. On by default for full-tunnel configs.
+  options to allow the local network and device discovery (AirPlay, printers). On by default
+  for full-tunnel configs.
 - **Editor:** a plain-text wg-quick editor with line-numbered errors as you type. Keys stay
   hidden until you unlock with Touch ID.
 - **Command line:** connect, disconnect, import, export, rename, delete, on-demand and kill

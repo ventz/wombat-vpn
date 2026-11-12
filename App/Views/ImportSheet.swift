@@ -134,6 +134,17 @@ private struct CandidateRow: View {
                 }
                 .font(.callout.monospaced())
                 .foregroundStyle(.secondary)
+                // Full tunnels import with the kill switch on and the LAN blocked
+                // (TunnelStore.add), which hides AirPlay and printers: say so and where to
+                // change it (GitHub issue #2).
+                if config.isFullTunnel {
+                    Label {
+                        Text("This VPN sends all traffic through the tunnel, so it is added with the kill switch on and the local network blocked: AirPlay devices and printers won't show up while it's connected. To change that later, open its Connection tab. “Allow local network” reaches devices such as a NAS by IP address, and “Allow device discovery” then brings back AirPlay and printers.")
+                    } icon: {
+                        Image(systemName: "info.circle").foregroundStyle(.secondary)
+                    }
+                    .font(.callout)
+                }
                 DiagnosticsList(result: result, findings: candidate.findings)
             } else {
                 DiagnosticsList(result: result, findings: [])

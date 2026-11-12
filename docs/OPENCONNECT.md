@@ -140,7 +140,7 @@ doesn't count as routing IPv6, and an IPv6-only gateway that routes `2000::/3` b
   the gateway ends a session, the VPN's Overview shows why, with the gateway's own message when it
   sent one. (The system log, `wombat logs -f`, has the same steps, with their details marked
   private.)
-- **Connects, then drops right away:** turn on **Settings › General › Troubleshooting › Debug
+- **Connects, then drops right away:** turn on **Settings › Troubleshooting › Debug
   logging**, connect again, then click **Save Diagnostics…** in the Log tab (or run
   `wombat diagnostics <name> --hide-servers -o report.txt`) and attach the file to your report.
   The file holds no keys, passwords or session cookies. With **Hide server names…** (the default

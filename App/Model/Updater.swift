@@ -25,7 +25,7 @@ enum UpdatePolicy {
     }
 }
 
-/// Settings › General › Updates.
+/// Settings › Updates.
 enum UpdateAlertMode: String, CaseIterable, Identifiable {
     case window, dot, off
     var id: Self { self }

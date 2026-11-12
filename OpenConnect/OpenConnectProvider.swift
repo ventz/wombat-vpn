@@ -132,7 +132,7 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
             note("The gateway sent more than Wombat accepts. Left out: \(plan.dropped.joined(separator: "; ")).")
         }
 
-        setTunnelNetworkSettings(Self.networkSettings(plan, remote: session.address)) { [weak self] error in
+        setTunnelNetworkSettings(Self.networkSettings(plan, remote: session.address, localDiscovery: localDiscovery)) { [weak self] error in
             self?.queue.async { [weak self] in
                 guard let self else { return }
                 // A stop while macOS applied the settings wins: nothing may start after it (Q5-M1).
@@ -197,7 +197,7 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
         queue.async { [weak self] in
             guard let self, next != self.plan else { return }
             self.plan = next
-            self.setTunnelNetworkSettings(Self.networkSettings(next, remote: self.gateway)) { [weak self] error in
+            self.setTunnelNetworkSettings(Self.networkSettings(next, remote: self.gateway, localDiscovery: self.localDiscovery)) { [weak self] error in
                 if let error { self?.note("Could not apply the gateway's new settings: \(error.localizedDescription)") }
             }
         }
@@ -302,7 +302,13 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
         guard ConsoleOwner.mayStart(owner: owner, onDemandStart: false) else { throw OpenConnectError.notOwner }
     }
 
-    static func networkSettings(_ plan: OpenConnectNetworkPlan, remote: String?) -> NEPacketTunnelNetworkSettings {
+    /// Bonjour exception (issue #2): only as a sub-setting of kill switch + local network.
+    private var localDiscovery: Bool {
+        let wants = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?[ProviderConfigKey.localDiscovery] as? Bool ?? false
+        return wants && protocolConfiguration.includeAllNetworks && protocolConfiguration.excludeLocalNetworks
+    }
+
+    static func networkSettings(_ plan: OpenConnectNetworkPlan, remote: String?, localDiscovery: Bool = false) -> NEPacketTunnelNetworkSettings {
         // The gateway's address when it's an IP literal; the provider's own sockets bypass the
         // tunnel either way.
         let remoteAddress = remote.flatMap { IPAddressRange($0) != nil ? $0 : nil } ?? "127.0.0.1"
@@ -311,12 +317,14 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
             let v4 = NEIPv4Settings(addresses: [a.address], subnetMasks: [a.mask])
             v4.includedRoutes = plan.ipv4Included.map { $0.prefixLength == 0 ? .default() : NEIPv4Route(destinationAddress: $0.address, subnetMask: $0.mask) }
             v4.excludedRoutes = plan.ipv4Excluded.map { NEIPv4Route(destinationAddress: $0.address, subnetMask: $0.mask) }
+                + (localDiscovery ? [NEIPv4Route(destinationAddress: "224.0.0.251", subnetMask: "255.255.255.255")] : [])
             settings.ipv4Settings = v4
         }
         if let a = plan.ipv6Address {
             let v6 = NEIPv6Settings(addresses: [a.address], networkPrefixLengths: [NSNumber(value: a.prefixLength)])
             v6.includedRoutes = plan.ipv6Included.map { $0.prefixLength == 0 ? .default() : NEIPv6Route(destinationAddress: $0.address, networkPrefixLength: NSNumber(value: $0.prefixLength)) }
             v6.excludedRoutes = plan.ipv6Excluded.map { NEIPv6Route(destinationAddress: $0.address, networkPrefixLength: NSNumber(value: $0.prefixLength)) }
+                + (localDiscovery ? [NEIPv6Route(destinationAddress: "ff02::fb", networkPrefixLength: 128)] : [])
             settings.ipv6Settings = v6
         }
         if !plan.dnsServers.isEmpty {

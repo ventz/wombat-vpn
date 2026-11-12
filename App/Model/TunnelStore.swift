@@ -1188,6 +1188,9 @@ final class TunnelStore: ObservableObject {
         proto.includeAllNetworks = protection.killSwitch
         proto.excludeLocalNetworks = protection.allowLAN
         proto.enforceRoutes = !protection.killSwitch && protection.allowLAN && tunnel.canAllowLANWithoutKillSwitch
+        var providerConfiguration = proto.providerConfiguration ?? [:]
+        providerConfiguration[ProviderConfigKey.localDiscovery] = protection.effective.allowDiscovery
+        proto.providerConfiguration = providerConfiguration
         try await tunnel.manager.saveToPreferences()
         await reload()
     }

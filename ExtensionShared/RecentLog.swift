@@ -27,7 +27,7 @@ final class RecentLog: @unchecked Sendable {
         return "Wombat \(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?")), macOS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
     }
 
-    /// Debug logging (Settings › General › Troubleshooting) keeps more lines: the engine says more.
+    /// Debug logging (Settings › Troubleshooting) keeps more lines: the engine says more.
     func setDebug(_ on: Bool) {
         lock.lock(); defer { lock.unlock() }
         capacity = on ? 3000 : 500

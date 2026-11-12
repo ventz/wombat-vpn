@@ -12,6 +12,9 @@ public final class TunnelConfiguration {
     /// family a full tunnel leaves out (IPv6 when only IPv4 is full-tunneled, and vice versa).
     public var blockUncoveredIPv4 = false
     public var blockUncoveredIPv6 = false
+    /// Wombat: leave Bonjour's multicast groups (224.0.0.251, ff02::fb) outside the tunnel so
+    /// local devices can be discovered with the kill switch on (issue #2). Off by default.
+    public var excludeLocalDiscovery = false
 
     public init(name: String?, interface: InterfaceConfiguration, peers: [PeerConfiguration]) {
         self.interface = interface

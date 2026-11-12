@@ -42,6 +42,7 @@ extension Control.OnDemand {
 
 extension Control.Protection {
     init(proto: NETunnelProviderProtocol?) {
-        self.init(killSwitch: proto?.includeAllNetworks ?? false, allowLAN: proto?.excludeLocalNetworks ?? true)
+        self.init(killSwitch: proto?.includeAllNetworks ?? false, allowLAN: proto?.excludeLocalNetworks ?? true,
+                  allowDiscovery: proto?.providerConfiguration?[ProviderConfigKey.localDiscovery] as? Bool ?? false)
     }
 }

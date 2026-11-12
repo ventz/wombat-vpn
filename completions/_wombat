@@ -115,6 +115,7 @@ _wombat() {
         '::Wi-Fi network name: ' && ret=0 ;;
     killswitch)
       _arguments '--allow-lan[let local network traffic through]' \
+        '--allow-discovery[also let Bonjour/AirPlay discovery through]' \
         ':tunnel:_wombat_tunnels' \
         ':state:((on\:"block traffic outside the tunnel" off\:"turn the kill switch off"))' && ret=0 ;;
     logs)

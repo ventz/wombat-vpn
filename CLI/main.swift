@@ -29,7 +29,7 @@ Tunnels (talk to the app; it starts in the background if needed):
   wombat delete <name>                 Asks for approval in the app
   wombat ondemand <name> on|off [--no-wifi|--wifi] [--no-ethernet|--ethernet]
   wombat ondemand <name> trust|untrust <wifi-name>
-  wombat killswitch <name> on|off [--allow-lan]
+  wombat killswitch <name> on|off [--allow-lan] [--allow-discovery]
   wombat log <name>                    Recent log lines from the tunnel's current or last run
 
 Diagnostics:
@@ -440,12 +440,19 @@ func cmdKillSwitch(_ args: Args) throws {
     var request = Control.Request(.protection, name: name)
     // Same default as the app for full tunnels: the local network stays blocked unless asked
     // for (TunnelVision / LocalNet; audit Q2-M3). --block-lan is still accepted.
-    request.protection = Control.Protection(killSwitch: state == "on", allowLAN: args.has("--allow-lan"))
+    // --allow-discovery (Bonjour/AirPlay through the kill switch, issue #2) needs the local
+    // network allowed, so it implies --allow-lan; with the kill switch off it has no effect.
+    let discovery = args.has("--allow-discovery")
+    if discovery && state == "off" { throw Usage(message: "killswitch: --allow-discovery is a kill switch exception; with the kill switch off, discovery already works") }
+    let allowLAN = args.has("--allow-lan") || discovery
+    request.protection = Control.Protection(killSwitch: state == "on", allowLAN: allowLAN, allowDiscovery: discovery)
     if state == "off" { printErr("Confirm with Touch ID or your password in Wombat…") }
-    else if args.has("--allow-lan") { printErr("Waiting for Wombat (approve there if it asks)…") }
+    else if allowLAN { printErr("Waiting for Wombat (approve there if it asks)…") }
     let r = try call(request)
     let p = r.tunnels?.first?.protection
-    print("kill switch: \(p?.killSwitch == true ? "on" : "off")  local network: \(p?.allowLAN == false ? "blocked" : "allowed")")
+    var line = "kill switch: \(p?.killSwitch == true ? "on" : "off")  local network: \(p?.allowLAN == false ? "blocked" : "allowed")"
+    if p?.killSwitch == true, p?.allowLAN == true { line += "  discovery: \(p?.allowDiscovery == true ? "allowed" : "blocked")" }
+    print(line)
 }
 
 func cmdLog(_ args: Args) throws {

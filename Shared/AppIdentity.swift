@@ -61,6 +61,10 @@ enum ProviderConfigKey {
     /// login window is allowed only for an on-demand tunnel (review SEC-2, security-6 L4).
     /// Not a secret: on-demand rules sit in the same world-readable file.
     static let onDemand = "od"
+    /// Kill switch exception for Bonjour (mDNS, 224.0.0.251 and ff02::fb), so AirPlay and other
+    /// local devices can be discovered (GitHub issue #2). Off unless set; the extension honors it
+    /// only with the kill switch on AND the local network allowed. Not a secret.
+    static let localDiscovery = "ld"
 }
 
 /// Keys of the options dictionary passed to `startVPNTunnel(options:)`.
@@ -76,7 +80,7 @@ enum StartOption {
     /// reboot or an update the app can't hand configurations over until this start launches it.
     /// The extension then waits (at most 10 s) for a copy with the configuration's revision.
     static let awaitHandOff = "awaitHandOff"
-    /// Debug logging is on (Settings › General › Troubleshooting): when it ends, as seconds since
+    /// Debug logging is on (Settings › Troubleshooting): when it ends, as seconds since
     /// 1970 (NSNumber). The AnyConnect engine then logs in more detail, into the app's Log tab
     /// only (never the system log, which anyone on the Mac can read); every extension keeps a
     /// longer log. Starts that macOS makes on its own (on-demand) carry no options.

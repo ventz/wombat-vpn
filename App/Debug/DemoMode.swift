@@ -19,8 +19,74 @@ enum DemoMode {
         if captureDirectory != nil {
             // The app is sandboxed: write inside its own container and copy out afterwards.
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("screenshots").path
-            Task { await capture(model, into: dir) }
+            if ProcessInfo.processInfo.environment["WOMBAT_CAPTURE_SETTINGS"] != nil {
+                Task { await captureSettings(model, into: dir) }
+            } else {
+                Task { await capture(model, into: dir) }
+            }
         }
+    }
+
+    static let settingsTabNotification = Notification.Name("WombatDemoSettingsTab")
+
+    /// Opens the real Settings window (the scene needs a view's openSettings).
+    private struct SettingsOpener: View {
+        @Environment(\.openSettings) private var openSettings
+        var body: some View { Color.clear.frame(width: 1, height: 1).onAppear { openSettings() } }
+    }
+
+    /// `WOMBAT_CAPTURE_SETTINGS=1`: every Settings tab and the Connection tab's protection states,
+    /// for reviewing UI changes before a signed build (not part of the site screenshots).
+    private static func captureSettings(_ model: AppModel, into dir: String) async {
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? await Task.sleep(for: .seconds(2))
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) else {
+            print("demo: no main window"); AppDelegate.quitWithoutAsking = true; NSApp.terminate(nil); return
+        }
+        window.setContentSize(NSSize(width: 1080, height: 760))
+        window.center()
+        let only = ProcessInfo.processInfo.environment["WOMBAT_CAPTURE_APPEARANCE"]
+        for (appearance, suffix) in [(NSAppearance.Name.darkAqua, "dark"), (.aqua, "light")] where only == nil || only == suffix {
+            NSApp.appearance = NSAppearance(named: appearance)
+
+            // Connection tab of the full-tunnel "Home": LAN blocked, LAN allowed, discovery allowed.
+            if let home = model.store.tunnels.first(where: { $0.name == "Home" }), let proto = home.proto {
+                model.selection = home.id
+                model.detailTab = .connection
+                for (name, lan, discovery) in [("blocked", false, false), ("lan", true, false), ("discovery", true, true)] {
+                    proto.includeAllNetworks = true
+                    proto.excludeLocalNetworks = lan
+                    var config = proto.providerConfiguration ?? [:]
+                    config[ProviderConfigKey.localDiscovery] = discovery
+                    proto.providerConfiguration = config
+                    home.objectWillChange.send()
+                    makeKey(window)
+                    try? await Task.sleep(for: .milliseconds(900))
+                    await saveActive(window, "\(dir)/connection-\(name)-\(suffix).png")
+                }
+                model.detailTab = .overview
+            }
+
+            // Every Settings tab, in the real Settings window.
+            let opener = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1, height: 1), styleMask: [.borderless], backing: .buffered, defer: false)
+            opener.contentView = NSHostingView(rootView: SettingsOpener())
+            opener.orderFrontRegardless()
+            try? await Task.sleep(for: .milliseconds(1200))
+            opener.close()
+            guard let settings = NSApp.windows.first(where: { $0.isVisible && $0 != window && $0 != opener && $0.canBecomeKey && $0.frame.width > 300 }) else {
+                print("demo: no Settings window"); break
+            }
+            for tab in SettingsTab.allCases {
+                NotificationCenter.default.post(name: settingsTabNotification, object: tab)
+                makeKey(settings)
+                try? await Task.sleep(for: .milliseconds(900))
+                await saveActive(settings, "\(dir)/settings-\(tab.rawValue)-\(suffix).png")
+            }
+            settings.close()
+            settings.level = .normal
+        }
+        print("demo: captured to \(dir)")
+        AppDelegate.quitWithoutAsking = true; NSApp.terminate(nil)
     }
 
     private static func makeTunnels() -> [Tunnel] {

@@ -202,7 +202,7 @@ import `build/ocserv-peer/wombat-ocserv.anyconnect` and sign in as `test` / `tes
 
 - `wombat doctor` first.
 - The Log tab and `wombat log <name>` show the extension's own log (scrubbed by
-  `TunnelCore/LogScrubber.swift` on the way in); Settings › General › Troubleshooting › Debug logging adds
+  `TunnelCore/LogScrubber.swift` on the way in); Settings › Troubleshooting › Debug logging adds
   libopenconnect's PRG_DEBUG lines. `wombat diagnostics` bundles both with versions and macOS's
   nesessionmanager lines. `OCPROBE_DEBUG=1 scripts/dev/oc-probe.sh` runs the engine at that level
   against ocserv and fails if any token, STRAP key or secret-named header value survives the

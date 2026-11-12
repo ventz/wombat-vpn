@@ -91,6 +91,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             let hosts = Set(core.peers.compactMap(\.endpoint).filter(\.isHostname).map(\.hostString))
             let addresses = EndpointAddresses.resolve(tunnelID: id, hosts: hosts, options: options, killSwitch: killSwitch)
             configuration = try ConfigBridge.wireGuardKit(core, name: protocolConfiguration.serverAddress, addresses: addresses.chosen)
+            // Bonjour exception (issue #2): only as a sub-setting of kill switch + local network.
+            let wantsDiscovery = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?[ProviderConfigKey.localDiscovery] as? Bool ?? false
+            configuration.excludeLocalDiscovery = wantsDiscovery && killSwitch && protocolConfiguration.excludeLocalNetworks
+            if configuration.excludeLocalDiscovery { log.notice("Kill switch exception: Bonjour discovery (mDNS) stays on the local network") }
             pending = (id, hosts, addresses.pending)
             // The engine only, never the settings: they identify the server to a censor. Private,
             // since using AmneziaWG at all can be sensitive for whoever reads a sysdiagnose (S4-L2).

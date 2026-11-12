@@ -142,10 +142,17 @@ class PacketTunnelSettingsGenerator {
 
         let ipv4Settings = NEIPv4Settings(addresses: ipv4Addresses.map { $0.destinationAddress }, subnetMasks: ipv4Addresses.map { $0.destinationSubnetMask })
         ipv4Settings.includedRoutes = ipv4IncludedRoutes
+        // Wombat: the mDNS group only (link-local by definition, TTL 255), never 224.0.0.0/4.
+        if tunnelConfiguration.excludeLocalDiscovery {
+            ipv4Settings.excludedRoutes = [NEIPv4Route(destinationAddress: "224.0.0.251", subnetMask: "255.255.255.255")]
+        }
         networkSettings.ipv4Settings = ipv4Settings
 
         let ipv6Settings = NEIPv6Settings(addresses: ipv6Addresses.map { $0.destinationAddress }, networkPrefixLengths: ipv6Addresses.map { $0.destinationNetworkPrefixLength })
         ipv6Settings.includedRoutes = ipv6IncludedRoutes
+        if tunnelConfiguration.excludeLocalDiscovery {
+            ipv6Settings.excludedRoutes = [NEIPv6Route(destinationAddress: "ff02::fb", networkPrefixLength: 128)]
+        }
         networkSettings.ipv6Settings = ipv6Settings
 
         return networkSettings
