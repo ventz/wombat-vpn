@@ -80,12 +80,17 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let data = try JSONEncoder().encode(Record(ownerUID: uid, config: text, revision: revision.isEmpty ? nil : revision))
             let target = file(id)
-            try data.write(to: target, options: [.atomic, .completeFileProtection])
+            // No Data Protection class: the folder is root-only and the file 0600 already, and
+            // a class-A write from a root system extension (no user keybag) is refused on some
+            // Macs (GitHub issue #3, macOS 26.7.3: "You don't have permission to save").
+            try data.write(to: target, options: [.atomic])
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
             log.notice("Stored configuration for \(id, privacy: .public)")
             reply(nil)
         } catch {
-            reply("Could not save: \(error.localizedDescription)")
+            let detail = FileErrorDetail.describe(error)
+            log.error("Could not store \(id, privacy: .public): \(detail, privacy: .public)")
+            reply("Could not save: \(detail)")
         }
     }
 
@@ -97,7 +102,7 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
         do {
             if FileManager.default.fileExists(atPath: file(id).path) { try FileManager.default.removeItem(at: file(id)) }
         } catch {
-            return reply("Could not remove the extension's copy: \(error.localizedDescription)")
+            return reply("Could not remove the extension's copy: \(FileErrorDetail.describe(error))")
         }
         onForget(id)
         reply(nil)

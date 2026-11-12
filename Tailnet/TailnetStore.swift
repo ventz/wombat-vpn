@@ -60,10 +60,11 @@ final class TailnetStore: SecretStore, @unchecked Sendable {
     func pinSuffix(_ suffix: String, in stateDirectory: URL) {
         let file = stateDirectory.appendingPathComponent("magicdns-suffix")
         do {
-            try Data(suffix.utf8).write(to: file, options: [.atomic, .completeFileProtection])
+            // No Data Protection class (see SecretStore.store): root-only folder, 0600 file.
+            try Data(suffix.utf8).write(to: file, options: [.atomic])
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         } catch {
-            log.error("Could not save the tailnet's DNS name: \(error.localizedDescription, privacy: .public)")
+            log.error("Could not save the tailnet's DNS name: \(FileErrorDetail.describe(error), privacy: .public)")
         }
     }
 
