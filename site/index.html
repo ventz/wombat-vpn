@@ -164,14 +164,33 @@
     border: 0;
   }
 
+  /* The label sits inside the h2 so heading navigation speaks the topic, and
+     stays on its own line with the same size and spacing it had as a paragraph.
+     line-height is the body's: the heading's tighter line-height must not shrink it. */
   .eyebrow {
+    display: block;
     font-size: 13px;
+    line-height: 1.65;
     text-transform: uppercase;
     letter-spacing: .14em;
     color: var(--muted);
     font-weight: 600;
     margin: 0 0 12px;
     text-align: center;
+  }
+
+  /* Screen-reader text, such as the colon between a section label and its heading.
+     Focusable content (a skip link) is left visible. */
+  .visually-hidden:where(:not(:focus-within, :active)) {
+    position: absolute !important;
+    clip-path: inset(50%) !important;
+    overflow: hidden !important;
+    width: 1px !important;
+    height: 1px !important;
+    margin: -1px !important;
+    padding: 0 !important;
+    border: 0 !important;
+    white-space: nowrap !important;
   }
 
   /* The three pillars, in the order they matter: security, ease, power */
@@ -312,6 +331,23 @@
 
   a { color: var(--red-lift); }
   footer a { color: var(--muted); }
+
+  /* Keyboard focus. Outline, not a shadow: Windows forced-colors mode drops
+     box-shadow and keeps outline (recolored to the system color). 2px with a
+     3px outward offset, in the page text color. That color is about 17:1
+     against the page, the panels and the terminal, and about 4.6:1 against
+     the red button. The page is dark only, so one color covers every surface. */
+  :focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 3px;
+  }
+
+  /* The terminal clips overflow and rounds its corners (13px), so an outward
+     ring on the output is cut off. Inset it past that curve; the padding is
+     deep enough that the ring misses the text. */
+  .terminal pre:focus-visible {
+    outline-offset: -6px;
+  }
 </style>
 </head>
 <body>
@@ -364,8 +400,7 @@
 
   <hr class="rule">
 
-  <p class="eyebrow">1 &middot; Security</p>
-  <h2>Security comes first</h2>
+  <h2><span class="eyebrow">1 &middot; Security<span class="visually-hidden">:</span></span> Security comes first</h2>
   <p class="lead">
     Every design decision starts here: where your keys live, what runs as root, what a config
     file is allowed to do, and what any other program on your Mac can change.
@@ -411,8 +446,7 @@
 
   <hr class="rule">
 
-  <p class="eyebrow">2 &middot; Easy and beautiful</p>
-  <h2>Feels like part of macOS</h2>
+  <h2><span class="eyebrow">2 &middot; Easy and beautiful<span class="visually-hidden">:</span></span> Feels like part of macOS</h2>
   <p class="lead">
     A SwiftUI app and menu bar item that look and behave like Apple made them. Import your
     tunnels in a minute and see exactly what each one does.
@@ -461,15 +495,14 @@
 
   <hr class="rule">
 
-  <p class="eyebrow">3 &middot; Powerful</p>
-  <h2>Powerful when you need it</h2>
+  <h2><span class="eyebrow">3 &middot; Powerful<span class="visually-hidden">:</span></span> Powerful when you need it</h2>
   <p class="lead">
     Automatic connections, a config linter, and a complete command line for scripts, CI and
     coding agents.
   </p>
   <figure class="terminal" aria-label="Example terminal session using the wombat command">
     <div class="chrome" aria-hidden="true"><i></i><i></i><i></i></div>
-<pre tabindex="0" aria-label="Terminal output (scrolls sideways)"><span class="cmd"><span class="p">$ </span>wombat status
+<pre tabindex="0" role="region" aria-label="Terminal output (scrolls sideways)"><span class="cmd"><span class="p">$ </span>wombat status
 <span class="ok">●</span> home     connected  since 9:41 AM  vpn.example.com:51820
 ○ office   disconnected  on-demand  kill-switch</span><span class="cmd"><span class="p">$ </span>wombat show home
 peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
@@ -506,8 +539,7 @@ peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
 
   <hr class="rule">
 
-  <p class="eyebrow">4 &middot; Cisco AnyConnect</p>
-  <h2>Your work VPN, in the same app</h2>
+  <h2><span class="eyebrow">4 &middot; Cisco AnyConnect<span class="visually-hidden">:</span></span> Your work VPN, in the same app</h2>
   <p class="lead">
     Most universities and companies run Cisco AnyConnect (Cisco Secure Client). Wombat connects to
     those gateways too, through <a href="https://www.infradead.org/openconnect/">OpenConnect</a>,
@@ -557,8 +589,7 @@ peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
 
   <hr class="rule">
 
-  <p class="eyebrow">5 &middot; Tailscale</p>
-  <h2>Your tailnet, without another app</h2>
+  <h2><span class="eyebrow">5 &middot; Tailscale<span class="visually-hidden">:</span></span> Your tailnet, without another app</h2>
   <p class="lead">
     Wombat joins Tailscale tailnets, and tailnets run by
     <a href="https://headscale.net/">Headscale</a>, your own open-source coordination server.
@@ -594,8 +625,7 @@ peer: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
 
   <hr class="rule">
 
-  <p class="eyebrow">6 &middot; Accessible</p>
-  <h2>Built for everyone</h2>
+  <h2><span class="eyebrow">6 &middot; Accessible<span class="visually-hidden">:</span></span> Built for everyone</h2>
   <p class="lead">
     A VPN is something you need to trust at a glance. Wombat's interface is audited against WCAG 2.2 AA
     (as applied to Mac apps), and the findings are fixed before release.
