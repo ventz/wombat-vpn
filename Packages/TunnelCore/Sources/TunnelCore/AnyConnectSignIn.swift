@@ -19,6 +19,11 @@ public struct AnyConnectSession: Codable, Equatable, Sendable {
     /// The STRAP signing key (SEC1, base64) when the sign-in used STRAP: libopenconnect proves
     /// with it, at CONNECT, that the tunnel belongs to this sign-in. A credential, like the token.
     public var strapKey: String?
+    /// The connect attempt this session is handed over for (`StartNonce`), set by the app just
+    /// before the hand-off; the extension's start uses only a session with its own. Optional on
+    /// the wire, so an extension from before 1.4.6 ignores it (JSON decoding skips unknown keys)
+    /// and an app from before 1.4.6 sends none (decision 2-B).
+    public var startNonce: String?
 
     public init(cookie: String, host: String, port: Int, address: String?, serverCertificateSHA256: String, issued: Date = Date(), strapKey: String? = nil) {
         self.strapKey = strapKey
@@ -52,6 +57,7 @@ public struct AnyConnectSession: Codable, Equatable, Sendable {
         guard OpenConnectFile.normalizeFingerprint(serverCertificateSHA256) == serverCertificateSHA256 else {
             return "Invalid gateway certificate fingerprint"
         }
+        if let startNonce, !StartNonce.isValid(startNonce) { return "Invalid start nonce" }
         if let strapKey {
             guard strapKey.count <= 512, let der = Data(base64Encoded: strapKey), der.first == 0x30,
                   strapKey.unicodeScalars.allSatisfy({ $0.isASCII && $0 != ";" && $0 != " " }) else { return "Invalid STRAP key" }

@@ -406,7 +406,7 @@ enum TailnetError: LocalizedError {
         case .missingConfiguration: return "The tailnet has no saved configuration"
         case .notHandedOver: return "The Tailnet extension has no copy of this tailnet; connect from Wombat"
         case .outdatedCopy: return "This tailnet was edited while the Tailnet extension wasn't running; connect from Wombat to hand over the new settings"
-        case .handOffTimedOut: return "Wombat didn't deliver this tailnet to the Tailnet extension in time; try connecting again"
+        case .handOffTimedOut: return HandOffTimeoutText.tailnet
         case .canceled: return "The start was canceled"
         case .invalidProfile(let s): return "Invalid profile: \(s)"
         case .invalidPlan(let s): return s

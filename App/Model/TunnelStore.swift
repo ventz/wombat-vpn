@@ -33,8 +33,12 @@ final class Tunnel: ObservableObject, Identifiable {
     /// OpenConnect approval blocker gets the button too, but stays out of `extensionErrors`
     /// (those are hidden or cleared once the extension answers; the blocker isn't about that).
     var errorNeedsExtension: Bool {
-        lastError.map { Self.extensionErrors.contains($0) || $0 == ExtensionSecrets.openConnectNeedsApproval } == true
+        // By prefix: the app may join its hand-off cause to the text (HandOffReport).
+        lastError.map { error in
+            Self.extensionErrorPrefixes.contains { error.hasPrefix($0) } || error == ExtensionSecrets.openConnectNeedsApproval
+        } == true
     }
+    private static let extensionErrorPrefixes = Array(extensionErrors) + HandOffReport.adviceTexts
     static let extensionErrors: Set<String> = [ExtensionSecrets.notRunning, ExtensionSecrets.openConnectNotRunning, ExtensionSecrets.tailnetNotRunning]
     /// Bumped by every start and every stop the app makes, so a hand-off still waiting for an
     /// earlier start can tell that its result no longer describes the tunnel.
@@ -45,9 +49,19 @@ final class Tunnel: ObservableObject, Identifiable {
     /// for that stop ("canceled") isn't an error to show.
     private(set) var stoppedByApp = false
 
+    /// What the app's launch hand-off ran into for the current start, if anything: joined with
+    /// the extension's "didn't deliver ... in time" so that text doesn't hide the app's cause.
+    private(set) var handOffNote: AppHandOffNote?
+
+    /// Lines the app itself added to this start's log (the end reason, hand-off problems): put
+    /// back after every copy of the extension's log, which doesn't have them (review S2).
+    private(set) var appLogLines: [String] = []
+
     func markStart() -> (count: Int, at: Date) {
         startCount += 1
         stoppedByApp = false
+        handOffNote = nil
+        appLogLines = []
         let at = Date()
         lastStartAt = at
         return (startCount, at)
@@ -83,9 +97,29 @@ final class Tunnel: ObservableObject, Identifiable {
     /// but macOS stops delivering messages once the session is stopping, so the app never gets
     /// that last copy (device test, build 39). Same timestamp format as `RecentLog`.
     func noteEnd(_ reason: String) {
+        appendAppLine("\(Self.logTimestamp()) Tunnel ended: \(LogScrubber.scrub(reason))")
+    }
+
+    private func appendAppLine(_ line: String) {
+        appLogLines.append(line)
+        if appLogLines.count > 20 { appLogLines.removeFirst(appLogLines.count - 20) }
+        recentLog.append(line)
+    }
+
+    /// The launch hand-off failed: kept in the log (Save Diagnostics) and added to the shown
+    /// error if the extension's timeout already replaced it.
+    func noteHandOff(_ note: AppHandOffNote) {
+        handOffNote = note
+        appendAppLine("\(Self.logTimestamp()) Hand-off: \(LogScrubber.scrub(note.text))")
+        if let shown = lastError, HandOffReport.isHandOffTimeout(shown) {
+            lastError = HandOffReport.reason(extensionReason: shown, appNote: note)
+        }
+    }
+
+    private static func logTimestamp() -> String {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        recentLog.append("\(f.string(from: Date())) Tunnel ended: \(LogScrubber.scrub(reason))")
+        return f.string(from: Date())
     }
 
     enum Kind: String { case wireGuard, openConnect, tailnet }
@@ -335,8 +369,9 @@ final class TunnelStore: ObservableObject {
                         let text = (ns.userInfo[NSUnderlyingErrorKey] as? NSError)?.localizedDescription
                             ?? ns.localizedFailureReason ?? ns.localizedDescription
                         Task { @MainActor in
-                            tunnel.lastError = text
-                            tunnel.noteEnd(text)
+                            let shown = HandOffReport.reason(extensionReason: text, appNote: tunnel.handOffNote)
+                            tunnel.lastError = shown
+                            tunnel.noteEnd(shown)
                         }
                     }
                 }
@@ -961,7 +996,7 @@ final class TunnelStore: ObservableObject {
         needsOpenConnect?()
         if let blocker = await openConnectBlocker?() { throw StoreError.invalid(blocker) }
         var revisionAtStart = Self.revision(tunnel)
-        let session: AnyConnectSession
+        var session: AnyConnectSession
         do {
             session = try await signIn(tunnel, profile)
         } catch AnyConnectSignInError.untrustedServer(let host, let sha256, let reason) {
@@ -1013,6 +1048,10 @@ final class TunnelStore: ObservableObject {
         // after the check above gives the extension a different revision, and it refuses to start
         // the old session with the new profile (fails closed; S5C-M5).
         let revision = revisionAtStart
+        // Binds the session to this attempt (decision 2-B): only this start may use it.
+        guard let nonce = StartNonce.generate() else { throw StoreError.invalid("Could not generate a random value for this connection; try again") }
+        session.startNonce = nonce
+        options[StartOption.startNonce] = nonce as NSString
         var wakesExtension = false
         switch await ExtensionSecrets.has(.openConnect, id: tunnel.id, revision: revision) {
         case .notRunning:
@@ -1048,8 +1087,9 @@ final class TunnelStore: ObservableObject {
     }
 
     /// The start just launched the extension: hand over as soon as it answers (it waits up to
-    /// 10 s; the app a little longer, so its "didn't start" never comes before the extension's
-    /// own reason), then catch up on anything else that was waiting.
+    /// 10 s; the app a little longer, though that doesn't guarantee the app's result comes second:
+    /// the extension's wait starts only once it is running, and `HandOffReport` joins the two in
+    /// either order), then catch up on anything else that was waiting.
     private func handOffAfterLaunch(_ tunnel: Tunnel, start: (count: Int, at: Date), session: AnyConnectSession? = nil, revision: String? = nil) async {
         // Its own retries only, within 12 s of wall clock (security-8 L2).
         let outcome = await LaunchHandOff.run(attempts: 48, interval: .milliseconds(250), deadline: .seconds(12), deliver: {
@@ -1074,6 +1114,7 @@ final class TunnelStore: ObservableObject {
             await syncToExtension()
         case .failed(let message):
             tunnel.lastError = message
+            tunnel.noteHandOff(.cause(message))
             announceFailure(tunnel, ExtensionSecrets.Failure(errorDescription: message))
         case .unreachableWhileUp:
             // It started from its own current copy (it refuses any other): not an error.
@@ -1083,6 +1124,7 @@ final class TunnelStore: ObservableObject {
             log.notice("Hand-off for an earlier start of \(tunnel.name, privacy: .public) dropped")
         case .extensionNotRunning:
             log.error("The extension did not start within 12 s")
+            tunnel.noteHandOff(.unreachable("the \(tunnel.engine.name)'s service didn't answer Wombat for 12 s"))
             tunnel.lastError = TunnelErrorRules.errorAfterGivingUp(tunnel.lastError, notRunning: ExtensionSecrets.notRunningMessage(tunnel.engine))
             announceFailure(tunnel, ExtensionSecrets.Failure(errorDescription: tunnel.lastError))
         }
@@ -1227,9 +1269,9 @@ final class TunnelStore: ObservableObject {
     /// asks even when the status already says disconnected: the extension may still be stopping.
     func keepRecentLog(_ tunnel: Tunnel, force: Bool = false) async {
         var fresh = await fetchRecentLog(tunnel, force: force)
-        // A copy that was in flight at the drop must not erase the end line `noteEnd` added.
-        if !fresh.isEmpty, tunnel.status == .disconnected, let end = tunnel.recentLog.last,
-           end.contains(" Tunnel ended: "), !fresh.contains(end) { fresh.append(end) }
+        // The extension's copy doesn't have the lines the app wrote for this start (the end
+        // reason, hand-off problems); a copy, including one in flight at the drop, must not erase them.
+        fresh = AppLogMerge.merge(fresh: fresh, appLines: tunnel.appLogLines)
         // Unchanged lines aren't written back: every write redraws the Log tab (accessibility-10 M1).
         if !fresh.isEmpty, fresh != tunnel.recentLog { tunnel.recentLog = fresh }
     }

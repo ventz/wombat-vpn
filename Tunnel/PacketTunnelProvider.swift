@@ -284,7 +284,7 @@ enum TunnelError: LocalizedError {
         case .notHandedOver: return "The extension has no copy of this tunnel's configuration; open Wombat once to hand it over"
         case .outdatedCopy: return "This tunnel was edited while the network extension wasn't running; connect it from Wombat to hand over the new configuration"
         case .canceled: return "The start was canceled"
-        case .handOffTimedOut: return "Wombat didn't deliver this tunnel's configuration to the network extension in time; try connecting again"
+        case .handOffTimedOut: return TunnelCore.HandOffTimeoutText.wireGuard
         case .invalidConfiguration(let s): return "Invalid configuration: \(s)"
         case .dnsResolution(let hosts): return "Could not resolve endpoint \(hosts)"
         case .dnsBlockedByKillSwitch(let hosts):

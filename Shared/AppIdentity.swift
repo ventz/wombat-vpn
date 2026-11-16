@@ -85,4 +85,9 @@ enum StartOption {
     /// only (never the system log, which anyone on the Mac can read); every extension keeps a
     /// longer log. Starts that macOS makes on its own (on-demand) carry no options.
     static let debugLogging = "debugLogging"
+    /// AnyConnect: this connect attempt's `StartNonce` (NSString), also carried by the session the
+    /// app hands over for it. The extension starts only with a session carrying the same one, so
+    /// a session sent for another attempt (one stopped from System Settings, say) can't be used
+    /// (decision 2-B). Never logged.
+    static let startNonce = "startNonce"
 }

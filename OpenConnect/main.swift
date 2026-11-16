@@ -4,6 +4,16 @@ import TunnelCore
 
 // The OpenConnect (Cisco AnyConnect) extension: its own process and sandbox container, so a
 // bug in the OpenConnect C code can't reach the WireGuard extension's keys.
+
+// libopenconnect and OpenSSL write to the gateway's sockets with plain send()/write(), without
+// MSG_NOSIGNAL or SO_NOSIGPIPE, and the openconnect CLI ignores SIGPIPE in its own main.c, which
+// we don't link. So a write to a connection the gateway has already reset (likely after a sleep
+// or a network change) raises SIGPIPE, whose default action kills this whole process, every
+// tunnel and the XPC listener in it, with no "Tunnel ended" reason. Seen on a 1.4.5 Mac: launchd
+// "last terminating signal = Broken pipe: 13". Ignored, such a write fails with EPIPE instead,
+// an error libopenconnect already handles.
+signal(SIGPIPE, SIG_IGN)
+
 SecretStore.shared = OpenConnectStore()
 
 // The app hands profiles and sign-in sessions over this Mach service (NEMachServiceName in

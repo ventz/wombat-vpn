@@ -25,12 +25,21 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
     /// This start asked for debug logging (StartOption.debugLogging) until then: libopenconnect
     /// runs at PRG_DEBUG, and its debug lines are kept only before the deadline (quality-10 M6).
     private var debugUntil: Date?
+    /// This start's token in the store, and the generation of the session it used: its cleanup
+    /// drops only that session, never one the app handed over for a later start.
+    private var startToken: UInt64?
+    private var sessionGeneration: UInt64?
+    /// When this start began, for the hand-off diagnosis; when it stopped, for the cleanup.
+    private var startedAt = Date()
+    private var stopRequestedAt: Date?
+    /// This connect attempt's nonce from the app (decision 2-B); nil from an app before 1.4.6 or
+    /// a start made by macOS (System Settings), which then can't use a session the app sent for
+    /// one of its own connects. Never logged.
+    private var startNonce: String?
 
     private var store: OpenConnectStore { SecretStore.shared as! OpenConnectStore }
 
     override func startTunnel(options: [String: NSObject]?, completionHandler handler: @escaping (Error?) -> Void) {
-        // Every failure crosses to the app as NSError, or its text is lost (ProviderError).
-        let completionHandler: (Error?) -> Void = { handler($0.map(ProviderError.ns)) }
         let source = options?[StartOption.source] as? String ?? "the system (System Settings or on-demand)"
         note("Starting tunnel, requested by \(source)")
         let debugUntil = DebugLoggingDeadline.effective(stored: (options?[StartOption.debugLogging] as? NSNumber)?.doubleValue ?? 0)
@@ -40,51 +49,118 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
         self.debugUntil = debugUntil
         stateLock.withLock { stopped = false }
         let provider = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
-        guard let id = provider?[ProviderConfigKey.tunnelID] as? String else { return completionHandler(OpenConnectError.missingConfiguration) }
+        guard let id = provider?[ProviderConfigKey.tunnelID] as? String else { return handler(ProviderError.ns(OpenConnectError.missingConfiguration)) }
         let revision = provider?[ProviderConfigKey.revision] as? String
         tunnelID = id
+        // Per-start state, reset in case macOS ever reuses a provider instance (review S6).
+        startedAt = Date()
+        stopRequestedAt = nil
+        sessionGeneration = nil
+        handOffDiagnosis = nil
+        startNonce = options?[StartOption.startNonce] as? String
+        let store = self.store
+        let token = store.beginStart(for: id)
+        startToken = token
+        // Every failure crosses to the app as NSError, or its text is lost (ProviderError). A
+        // failed start no longer runs here (the self-restart rule counts running starts). The
+        // token is this start's own, captured, not read from `self` later (review round 2, S3).
+        let completionHandler: (Error?) -> Void = { error in
+            if error != nil, let token { store.finishStart(token) }
+            handler(error.map(ProviderError.ns))
+        }
         // This start may be what launched the process: wait (at most 10 s) for the app to hand
         // over the profile and the session.
         if options?[StartOption.awaitHandOff] != nil, let revision {
             waitForHandOff(id: id, revision: revision, attempt: 0) { [weak self] timedOut in
-                self?.queue.async { self?.begin(id: id, revision: revision, handOffTimedOut: timedOut, completionHandler: completionHandler) }
+                guard let self else { return completionHandler(OpenConnectError.canceled) }
+                self.queue.async {
+                    if timedOut { self.diagnoseHandOff(id: id, revision: revision) }
+                    self.begin(id: id, revision: revision, token: token, handOffTimedOut: timedOut, completionHandler: completionHandler)
+                }
             }
         } else {
-            queue.async { self.begin(id: id, revision: revision, handOffTimedOut: false, completionHandler: completionHandler) }
+            queue.async { self.begin(id: id, revision: revision, token: token, handOffTimedOut: false, completionHandler: completionHandler) }
         }
     }
 
     private func waitForHandOff(id: String, revision: String, attempt: Int, then: @escaping (_ timedOut: Bool) -> Void) {
         if stateLock.withLock({ stopped }) { return then(false) }
-        if store.revision(of: id) == .some(revision), store.hasSession(for: id, revision: revision) { return then(false) }
+        if store.revision(of: id) == .some(revision), store.hasSession(for: id, revision: revision, nonce: startNonce) { return then(false) }
         if attempt >= 40 { return then(true) }
         queue.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            self?.waitForHandOff(id: id, revision: revision, attempt: attempt + 1, then: then)
+            // A released provider still ends its start (and finishes its token), as canceled.
+            guard let self else { return then(false) }
+            self.waitForHandOff(id: id, revision: revision, attempt: attempt + 1, then: then)
         }
     }
 
-    private func begin(id: String, revision: String?, handOffTimedOut: Bool, completionHandler: @escaping (Error?) -> Void) {
+    /// Set when the wait for the hand-off ended without a session.
+    private var handOffDiagnosis: HandOffDiagnosis?
+
+    /// Says which stage of the hand-off failed (fixed words and counts only), so the next report
+    /// tells "the app never reached the extension" from "it was refused" from "no session sent".
+    /// The line also goes into the error, the one thing that surely reaches the app.
+    private func diagnoseHandOff(id: String, revision: String) {
+        let profile: HandOffDiagnosis.Profile = store.config(for: id) == nil ? .missing
+            : store.revision(of: id) == .some(revision) ? .current : .older
+        let seen = store.handOffActivity(for: id, since: startedAt.addingTimeInterval(-HandOffDiagnosis.lookback))
+        let diagnosis = HandOffDiagnosis(requests: seen.requests, profile: profile, refusals: seen.refusals)
+        log.error("Hand-off wait ended without a session; \(diagnosis.line, privacy: .public)")
+        recentLog.append("Hand-off wait ended without a session; \(diagnosis.line)")
+        handOffDiagnosis = diagnosis
+    }
+
+    private var timeoutError: OpenConnectError {
+        handOffDiagnosis?.appNeverReachedExtension == true ? .handOffUnreachable : .handOffTimedOut(handOffDiagnosis)
+    }
+
+    // MARK: Self-restart (decision 1-B; ExtensionSelfRestart has the rules and why they're safe)
+
+    /// For a start failing with `.handOffUnreachable`, after its own session cleanup: whether this
+    /// process should quit so macOS starts a fresh one. The exit comes `delay` later, after the
+    /// failing start's completion has reached NetworkExtension, and only if the check still holds
+    /// then; the time is recorded right before it (no record, no exit).
+    private func restartDecision(token: UInt64?) -> OpenConnectError {
+        let since = startedAt.addingTimeInterval(-HandOffDiagnosis.lookback)
+        let decision = ExtensionSelfRestart.decide(store.selfRestartInput(excluding: token, requestsSince: since))
+        if case .stay(let reason) = decision {
+            log.notice("Not restarting the OpenConnect extension: \(reason, privacy: .public)")
+            return .handOffUnreachable
+        }
+        // Nothing from the provider: it may be released before this runs (review round 2, M2).
+        let store = self.store, log = self.log
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + ExtensionSelfRestart.delay) {
+            let reason = store.exitIfIdle(excluding: token, requestsSince: since)  // returns only to stay
+            log.notice("Not restarting the OpenConnect extension after all: \(reason, privacy: .public)")
+        }
+        log.notice("Restarting the OpenConnect extension in \(Int(ExtensionSelfRestart.delay), privacy: .public) s unless something arrives")
+        return .handOffRestarting
+    }
+
+    /// `token`: this start's own, passed in rather than read from `self` (review round 3, R2).
+    private func begin(id: String, revision: String?, token: UInt64?, handOffTimedOut: Bool, completionHandler: @escaping (Error?) -> Void) {
         let engine: OpenConnectEngine
         let session: AnyConnectSession
         var ownerChecked = false
         do {
             if isStopped { throw OpenConnectError.canceled }
-            guard let text = store.config(for: id) else { throw OpenConnectError.notHandedOver }
+            guard let text = store.config(for: id) else { throw handOffTimedOut ? timeoutError : OpenConnectError.notHandedOver }
             try checkOwner(id)
             ownerChecked = true
             // Never start from a profile older than the configuration (fail closed; S3-M1/M2).
             if let revision, store.revision(of: id) != .some(revision) {
-                throw handOffTimedOut ? OpenConnectError.handOffTimedOut : OpenConnectError.outdatedCopy
+                throw handOffTimedOut ? timeoutError : OpenConnectError.outdatedCopy
             }
             let parsed = OpenConnectFile.parse(text)
             guard let profile = parsed.profile else {
                 throw OpenConnectError.invalidProfile(parsed.errors.map(\.description).joined(separator: "; "))
             }
-            guard let held = store.session(for: id, revision: revision) else {
-                throw handOffTimedOut ? OpenConnectError.handOffTimedOut : OpenConnectError.signInRequired
+            guard let held = store.session(for: id, revision: revision, nonce: startNonce) else {
+                throw handOffTimedOut ? timeoutError : OpenConnectError.signInRequired
             }
-            session = held
-            engine = OpenConnectEngine(settings: .init(session: held, pin: profile.serverCertificate,
+            session = held.session
+            sessionGeneration = held.generation
+            engine = OpenConnectEngine(settings: .init(session: held.session, pin: profile.serverCertificate,
                                                        userAgent: profile.userAgent ?? AnyConnectXML.defaultUserAgent,
                                                        dtls: profile.dtls, debug: debugUntil != nil)) { [weak self] level, message in
                 self?.engineLog(level, message)
@@ -92,8 +168,11 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
         } catch {
             // A session handed over for a start that is refused here goes now, not at its
             // 10-minute expiry (review NEW-10). Only once the owner is known to have asked: the
-            // session is the owner's, maybe for a start of their own that is on its way.
-            if ownerChecked { store.dropSession(for: id) }
+            // session is the owner's, maybe for a start of their own that is on its way. And only
+            // while no newer start of this tunnel has begun: that one's session stays.
+            if ownerChecked, let token { store.dropSession(for: id, ifLatestStart: token, nonce: startNonce, receivedBy: Date()) }
+            var error = error
+            if case OpenConnectError.handOffUnreachable = error { error = restartDecision(token: token) }
             // The label is fixed and public; the error, which can name the gateway, stays
             // private in the system log (SEC-10, review NEW-10).
             fail("Cannot start", error, completionHandler)
@@ -152,10 +231,15 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
                 }
                 self.claimedFD = fd
                 do {
+                    let generation = self.sessionGeneration
+                    let store = self.store
                     try engine.start(tunnelFD: fd) { [weak self] reason in
+                        // The tunnel no longer runs here, whether or not stopTunnel follows (S2).
+                        if reason != nil, let token { store.finishStart(token) }
                         // The engine closed its own copy of the descriptor; the claim on
-                        // NetworkExtension's lasts until stopTunnel.
-                        self?.store.dropSession(for: id)
+                        // NetworkExtension's lasts until stopTunnel. Only this start's session
+                        // goes: the loop can end after the app handed over a new one.
+                        if let generation { self?.store.dropSession(for: id, generation: generation) }
                         self?.queue.async { engine.shutdown() }
                         guard let self, let reason else { return }
                         // The gateway ended it, or reconnecting failed for 5 minutes.
@@ -183,9 +267,19 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
     /// the token goes. On the provider queue.
     private func teardown(_ id: String, _ engine: OpenConnectEngine) {
         engine.logOffWithoutTunnel()
-        store.dropSession(for: id)
+        dropOwnSession(id)
         engine.shutdown()
         stateLock.withLock { if current === engine { current = nil } }
+    }
+
+    /// The session this start used, or (if it never got one) whatever the app sent for it, as
+    /// long as no newer start of the tunnel has begun.
+    private func dropOwnSession(_ id: String) {
+        if let generation = sessionGeneration {
+            store.dropSession(for: id, generation: generation)
+        } else if let startToken {
+            store.dropSession(for: id, ifLatestStart: startToken, nonce: startNonce, receivedBy: stopRequestedAt ?? Date())
+        }
     }
 
     /// After a reconnect the gateway may assign other settings; apply them if they changed.
@@ -237,6 +331,8 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
             stopped = true
             return current
         }
+        let stopAt = Date()
+        queue.async { self.stopRequestedAt = stopAt }
         note("Stopping tunnel (reason \(reason.rawValue))")
         // Cancels a connect in progress, or ends the main loop with a logoff at the gateway.
         engine?.stop()
@@ -252,7 +348,8 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
                 engine?.forceStop()
                 for _ in 0..<50 where engine?.isRunning == true { usleep(100_000) }
             }
-            if let engine, let id { self.teardown(id, engine) } else if let id { self.store.dropSession(for: id) }
+            if let engine, let id { self.teardown(id, engine) } else if let id { self.dropOwnSession(id) }
+            if let token = self.startToken { self.store.finishStart(token) }
             if let fd = self.claimedFD {
                 TunnelDevice.release(fd)
                 self.claimedFD = nil
@@ -373,7 +470,11 @@ enum OpenConnectError: LocalizedError {
     case missingConfiguration
     case notHandedOver
     case outdatedCopy
-    case handOffTimedOut
+    case handOffTimedOut(HandOffDiagnosis?)
+    /// The wait ended and no request (or refusal) for this tunnel reached this process.
+    case handOffUnreachable
+    /// As `handOffUnreachable`, and this process is quitting so macOS starts a fresh one.
+    case handOffRestarting
     case canceled
     case invalidProfile(String)
     case signInRequired
@@ -387,7 +488,9 @@ enum OpenConnectError: LocalizedError {
         case .missingConfiguration: return "The VPN has no saved configuration"
         case .notHandedOver: return "The OpenConnect extension has no copy of this VPN; connect from Wombat"
         case .outdatedCopy: return "This VPN was edited while the OpenConnect extension wasn't running; connect from Wombat to hand over the new settings"
-        case .handOffTimedOut: return "Wombat didn't deliver this VPN's sign-in to the OpenConnect extension in time; try connecting again"
+        case .handOffTimedOut(let diagnosis): return HandOffTimeoutText.openConnect(diagnosis)
+        case .handOffUnreachable: return HandOffDiagnosis.unreachableMessage
+        case .handOffRestarting: return ExtensionSelfRestart.message
         case .canceled: return "The start was canceled"
         case .invalidProfile(let s): return "Invalid profile: \(s)"
         case .signInRequired: return "Sign in from Wombat to connect this VPN"

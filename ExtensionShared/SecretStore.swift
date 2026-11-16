@@ -55,6 +55,46 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
 
     // MARK: XPC
 
+    // MARK: Hand-off diagnostics
+
+    /// Per tunnel, with times, counts and fixed labels only (never request data): what a start
+    /// that waited in vain for its hand-off checks to say which stage failed.
+    private let activityLock = NSLock()
+    private var activity = HandOffActivity()
+
+    /// The app sent a request about this tunnel (any valid id; the owner check comes after).
+    func noteRequest(_ id: String) {
+        guard let key = UUID(uuidString: id)?.uuidString.lowercased() else { return }
+        activityLock.withLock { activity.noteRequest(key) }
+    }
+
+    /// `label` is a fixed word ("owner", "revision", "save"...), never text from the request.
+    func noteRefusal(_ id: String, _ label: String) {
+        guard let key = UUID(uuidString: id)?.uuidString.lowercased() else { return }
+        activityLock.withLock { activity.noteRefusal(key, label) }
+    }
+
+    /// For the OpenConnect extension's last check before it exits (decision 1-B): no request can
+    /// be noted while `body` runs.
+    func withActivityLocked<T>(_ body: (HandOffActivity) -> T) -> T {
+        activityLock.withLock { body(activity) }
+    }
+
+    /// A request that names no single tunnel (prune).
+    func noteRequestForAnyTunnel() {
+        activityLock.withLock { activity.noteRequest("*") }
+    }
+
+    /// Requests and refusals for any tunnel since `since`.
+    func handOffActivityTotal(since: Date) -> Int {
+        activityLock.withLock { activity.total(since: since) }
+    }
+
+    func handOffActivity(for id: String, since: Date) -> (requests: Int, refusals: [String: Int]) {
+        guard let key = UUID(uuidString: id)?.uuidString.lowercased() else { return (0, [:]) }
+        return activityLock.withLock { activity.summary(key, since: since) }
+    }
+
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
         // The listener's code-signing requirement already restricts clients to our app.
         connection.exportedInterface = interface
@@ -64,15 +104,18 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
     }
 
     func store(id: String, config: Data, revision: String, reply: @escaping (String?) -> Void) {
-        guard let uid = callerUID() else { return reply("Unknown caller") }
+        noteRequest(id)
+        guard let uid = callerUID() else { noteRefusal(id, "caller"); return reply("Unknown caller") }
         guard UUID(uuidString: id) != nil else { return reply("Invalid tunnel id") }
-        guard revision.isEmpty || UUID(uuidString: revision) != nil else { return reply("Invalid revision") }
+        guard revision.isEmpty || UUID(uuidString: revision) != nil else { noteRefusal(id, "invalid"); return reply("Invalid revision") }
         guard config.count <= maxBytes, let text = String(data: config, encoding: .utf8) else {
+            noteRefusal(id, "invalid")
             return reply("Configuration is not UTF-8 text under \(maxBytes / 1024) KB")
         }
-        if let problem = validate(text) { return reply("Invalid configuration: \(problem)") }
+        if let problem = validate(text) { noteRefusal(id, "invalid"); return reply("Invalid configuration: \(problem)") }
         lock.lock(); defer { lock.unlock() }
         if let owner = ownerUID(id), owner != uid {
+            noteRefusal(id, "owner")
             log.error("Refused store for \(id, privacy: .public): owned by uid \(owner, privacy: .public), caller \(uid, privacy: .public)")
             return reply("This tunnel belongs to another user of this Mac")
         }
@@ -89,12 +132,14 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
             reply(nil)
         } catch {
             let detail = FileErrorDetail.describe(error)
+            noteRefusal(id, "save")
             log.error("Could not store \(id, privacy: .public): \(detail, privacy: .public)")
             reply("Could not save: \(detail)")
         }
     }
 
     func remove(id: String, reply: @escaping (String?) -> Void) {
+        noteRequest(id)
         guard let uid = callerUID() else { return reply("Unknown caller") }
         guard UUID(uuidString: id) != nil else { return reply("Invalid tunnel id") }
         lock.lock(); defer { lock.unlock() }
@@ -109,6 +154,7 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
     }
 
     func prune(keeping ids: [String], reply: @escaping (Int) -> Void) {
+        noteRequestForAnyTunnel()
         guard let uid = callerUID() else { return reply(0) }
         let keep = Set(ids.compactMap(UUID.init(uuidString:)).map { $0.uuidString.lowercased() })
         lock.lock(); defer { lock.unlock() }
@@ -143,6 +189,7 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
     }
 
     func has(id: String, revision: String, reply: @escaping (Bool) -> Void) {
+        noteRequest(id)
         guard let uid = callerUID(), UUID(uuidString: id) != nil else { return reply(false) }
         lock.lock(); defer { lock.unlock() }
         guard ownerUID(id) == uid else { return reply(false) }
