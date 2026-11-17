@@ -203,6 +203,34 @@ public enum DisconnectReasonRule {
     public static func shouldFetch(before: Status, now: Status, stoppedByApp: Bool) -> Bool {
         now == .disconnected && !stoppedByApp && [.connecting, .connected, .reasserting, .disconnecting].contains(before)
     }
+
+    /// macOS's own error for a provider process that went away while it still held the session,
+    /// for example when an update replaced the extension mid-session (a 1.4.6 report: "The
+    /// operation couldn't be completed. (NEAgentErrorDomain error 2.)" right after an update).
+    /// Its codes are private, so the whole domain gets one plain message.
+    public static let agentDomain = "NEAgentErrorDomain"
+    public static let extensionStoppedMessage =
+        "The Wombat network extension stopped unexpectedly, for example because Wombat was just updated. Connect again."
+
+    /// The error macOS kept for the tunnel's last end, wrapped or not, if it is the agent's.
+    public static func agentError(in error: NSError) -> NSError? {
+        var current: NSError? = error
+        var depth = 0
+        while let e = current, depth < 8 {
+            if e.domain == agentDomain { return e }
+            current = e.userInfo[NSUnderlyingErrorKey] as? NSError
+            depth += 1
+        }
+        return nil
+    }
+
+    /// The text to show for a tunnel's last end. macOS may wrap the provider's error; the
+    /// provider's own message is the useful one. An agent error gets the plain message instead.
+    public static func text(for error: NSError) -> String {
+        if agentError(in: error) != nil { return extensionStoppedMessage }
+        return (error.userInfo[NSUnderlyingErrorKey] as? NSError)?.localizedDescription
+            ?? error.localizedFailureReason ?? error.localizedDescription
+    }
 }
 
 /// Files that hold a report: created 0600 before anything is written (no window at the default

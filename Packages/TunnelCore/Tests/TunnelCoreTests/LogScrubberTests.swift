@@ -124,6 +124,24 @@ import Testing
         #expect(!DisconnectReasonRule.shouldFetch(before: .connected, now: .disconnecting, stoppedByApp: false))
     }
 
+    @Test func agentErrorsBecomePlainWords() {
+        // As seen in a 1.4.6 report, bare and wrapped by NEVPNConnectionErrorDomain.
+        let agent = NSError(domain: "NEAgentErrorDomain", code: 2)
+        #expect(DisconnectReasonRule.text(for: agent) == DisconnectReasonRule.extensionStoppedMessage)
+        let wrapped = NSError(domain: "NEVPNConnectionErrorDomain", code: 5, userInfo: [NSUnderlyingErrorKey: agent])
+        #expect(DisconnectReasonRule.text(for: wrapped) == DisconnectReasonRule.extensionStoppedMessage)
+        #expect(DisconnectReasonRule.agentError(in: wrapped)?.code == 2)
+        let other = NSError(domain: "neagenterrordomain.lookalike", code: 2)
+        #expect(DisconnectReasonRule.agentError(in: other) == nil)
+    }
+
+    @Test func providerErrorsKeepTheirOwnText() {
+        let provider = NSError(domain: "Wombat", code: 1, userInfo: [NSLocalizedDescriptionKey: "Gateway ended the session"])
+        let wrapped = NSError(domain: "NEVPNConnectionErrorDomain", code: 5, userInfo: [NSUnderlyingErrorKey: provider])
+        #expect(DisconnectReasonRule.text(for: wrapped) == "Gateway ended the session")
+        #expect(DisconnectReasonRule.text(for: provider) == "Gateway ended the session")
+    }
+
     @Test func privateFilesAre0600EvenWhenTheyExisted() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

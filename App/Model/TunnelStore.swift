@@ -362,12 +362,17 @@ final class TunnelStore: ObservableObject {
                                                                    stoppedByApp: tunnel.stoppedByApp)
                 if tunnel.status == .disconnected, tunnel.stoppedByApp { tunnel.clearStopMark() }
                 if fetchReason {
+                    let log = self.log
                     tunnel.manager.connection.fetchLastDisconnectError { error in
                         guard let error else { return }
                         // macOS may wrap the provider's error; its own message is the useful one.
+                        // macOS's agent error (the extension process went away, e.g. replaced by
+                        // an update) becomes plain words; its domain and code go to the log.
                         let ns = error as NSError
-                        let text = (ns.userInfo[NSUnderlyingErrorKey] as? NSError)?.localizedDescription
-                            ?? ns.localizedFailureReason ?? ns.localizedDescription
+                        if let agent = DisconnectReasonRule.agentError(in: ns) {
+                            log.error("\(tunnel.name, privacy: .public) ended: extension process went away (\(agent.domain, privacy: .public) \(agent.code, privacy: .public))")
+                        }
+                        let text = DisconnectReasonRule.text(for: ns)
                         Task { @MainActor in
                             let shown = HandOffReport.reason(extensionReason: text, appNote: tunnel.handOffNote)
                             tunnel.lastError = shown
