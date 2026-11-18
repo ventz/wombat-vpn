@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import TunnelCore
 
 /// Stores each tunnel's wg-quick text (keys included) as a generic password in the login keychain.
 /// The NE configuration only carries a persistent reference to it (`passwordReference`).
@@ -50,5 +51,28 @@ enum ConfigKeychain {
 
     static func exists(_ reference: Data) -> Bool {
         SecItemCopyMatching([kSecValuePersistentRef: reference] as CFDictionary, nil) != errSecItemNotFound
+    }
+
+    /// Every Wombat item in this user's keychain, attributes only (no profile text), for
+    /// `RemovedConfigs`. Empty on any error: nothing is then offered.
+    static func list() -> [RemovedConfigs.Item<Data>] {
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching([
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: AppIdentity.keychainService,
+            kSecMatchLimit: kSecMatchLimitAll,
+            kSecReturnAttributes: true,
+            kSecReturnPersistentRef: true,
+        ] as CFDictionary, &result)
+        guard status == errSecSuccess, let rows = result as? [[String: Any]] else { return [] }
+        return rows.compactMap { row in
+            guard let reference = row[kSecValuePersistentRef as String] as? Data,
+                  let account = row[kSecAttrAccount as String] as? String else { return nil }
+            let description = row[kSecAttrDescription as String] as? String
+            let kind: RemovedConfigs.Kind = description == "AnyConnect profile" ? .openConnect
+                : description == "Tailnet profile" ? .tailnet : .wireGuard
+            return .init(reference: reference, account: account, label: row[kSecAttrLabel as String] as? String,
+                         kind: kind, created: row[kSecAttrCreationDate as String] as? Date)
+        }
     }
 }

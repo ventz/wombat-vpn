@@ -495,6 +495,18 @@ final class TunnelStore: ObservableObject {
             let existing = Set(tunnels.map(\.id))
             if !pendingHandOff.isSubset(of: existing) { pendingHandOff.formIntersection(existing) }
             loadError = nil
+            // Every configuration with a tunnel id counts as existing, shown or not (another
+            // account's, one we skipped): only a tunnel with no configuration at all is offered.
+            let configured = Set(managers.compactMap { manager -> UUID? in
+                guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else { return nil }
+                return (proto.providerConfiguration?[ProviderConfigKey.tunnelID] as? String).flatMap(UUID.init)
+            })
+            let removed = RemovedConfigs.find(ConfigKeychain.list(), existing: configured, now: Date())
+                .filter { $0.kind != .tailnet || TailnetPreview.enabled }
+            if removed.map(\.id) != removedConfigs.map(\.id) {
+                if !removed.isEmpty { log.notice("\(removed.count, privacy: .public) VPN(s) removed outside Wombat still have keychain settings; offering a restore") }
+                removedConfigs = removed
+            }
             if !neutralizedServers { Task { await neutralizeServerAddresses() } }
         } catch {
             loadError = error.localizedDescription
@@ -872,6 +884,51 @@ final class TunnelStore: ObservableObject {
         if !cookiesRemoved {
             throw StoreError.invalid("“\(tunnel.name)” was deleted, but its single sign-on cookies couldn't be removed. Sign out at your identity provider to end that session.")
         }
+    }
+
+    // MARK: VPNs removed outside Wombat
+
+    /// VPNs whose configuration macOS removed (an extension turned off in System Settings, a VPN
+    /// deleted there) while Wombat's keychain copy stayed (1.4.6 report, 2026-11-18).
+    @Published private(set) var removedConfigs: [RemovedConfigs.Removed<Data>] = []
+    /// One restore or forget at a time (a second click would add every VPN twice).
+    @Published private(set) var handlingRemoved = false
+
+    /// Adds each one again from its keychain copy, as a new VPN with the defaults of an import
+    /// (a full tunnel gets the kill switch again; on-demand stays off), then drops the old
+    /// items. Clicked in the app only: the CLI can't trigger it. Returns the names that failed.
+    func restoreRemoved() async -> [String] {
+        guard !handlingRemoved else { return [] }
+        handlingRemoved = true
+        defer { handlingRemoved = false }
+        var failed: [String] = []
+        for removed in removedConfigs {
+            do {
+                let text = try ConfigKeychain.read(removed.newest)
+                switch removed.kind {
+                case .tailnet: try await addTailnet(name: removed.name, text: text)
+                case .openConnect: try await addOpenConnect(name: removed.name, text: text)
+                case .wireGuard: try await add(name: removed.name, text: text)
+                }
+                removed.references.forEach(ConfigKeychain.delete)
+                log.notice("Restored a VPN removed outside Wombat")
+            } catch {
+                log.error("Restoring a removed VPN failed: \(error.localizedDescription, privacy: .public)")
+                failed.append(removed.name)
+            }
+        }
+        await reload()
+        return failed
+    }
+
+    /// Deletes the keychain copies of the removed VPNs: they won't be offered again.
+    func forgetRemoved() async {
+        guard !handlingRemoved else { return }
+        handlingRemoved = true
+        defer { handlingRemoved = false }
+        for removed in removedConfigs { removed.references.forEach(ConfigKeychain.delete) }
+        removedConfigs = []
+        await reload()
     }
 
     /// A copy under a new name (same keys): handy for variants such as split vs full tunnel.

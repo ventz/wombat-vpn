@@ -30,6 +30,8 @@ struct ContentView: View {
                         ExtensionBanner(installer: model.tailnetInstaller)
                     } else if let problem = store.extensionProblem {
                         ExtensionProblemBanner(message: problem)
+                    } else if !store.removedConfigs.isEmpty {
+                        RemovedConfigsBanner()
                     } else {
                         DebugLoggingBanner()
                     }
@@ -399,6 +401,53 @@ struct DebugLoggingBanner: View {
 }
 
 /// A problem with the extension itself (a code-signing mismatch, say), not with one tunnel.
+/// VPNs macOS removed (an extension turned off and on in System Settings) whose settings are
+/// still in Wombat's keychain: restore them, or forget them (1.4.6 report, 2026-11-18).
+struct RemovedConfigsBanner: View {
+    @EnvironmentObject private var store: TunnelStore
+    @State private var confirmingForget = false
+    @State private var failed: [String] = []
+
+    private var names: String { ListFormatter.localizedString(byJoining: store.removedConfigs.map { "“\($0.name)”" }) }
+    private var count: Int { store.removedConfigs.count }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.uturn.backward.circle.fill")
+                .font(.title2)
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(count == 1 ? "A VPN was removed outside Wombat" : "\(count) VPNs were removed outside Wombat").font(.headline)
+                Text("macOS removed \(names), for example when a Wombat extension was turned off in System Settings. Wombat still has \(count == 1 ? "its" : "their") settings and can add \(count == 1 ? "it" : "them") back.")
+                    .font(.callout).foregroundStyle(.secondary)
+                if !failed.isEmpty {
+                    Text("Couldn't restore \(ListFormatter.localizedString(byJoining: failed)). The Log has the reason.")
+                        .font(.callout).foregroundStyle(.red)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            Spacer()
+            Button("Forget…") { confirmingForget = true }
+                .disabled(store.handlingRemoved)
+            Button("Restore") {
+                Task { failed = await store.restoreRemoved() }
+            }
+            .disabled(store.handlingRemoved)
+        }
+        .padding(12)
+        .background(.orange.opacity(0.1))
+        .overlay(alignment: .bottom) { Divider() }
+        .confirmationDialog(count == 1 ? "Forget this VPN's settings?" : "Forget these VPNs' settings?",
+                            isPresented: $confirmingForget) {
+            Button("Forget", role: .destructive) { Task { await store.forgetRemoved() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Wombat deletes its copy of \(names). To use \(count == 1 ? "it" : "them") again, you'll have to add \(count == 1 ? "it" : "them") again.")
+        }
+    }
+}
+
 struct ExtensionProblemBanner: View {
     let message: String
 
