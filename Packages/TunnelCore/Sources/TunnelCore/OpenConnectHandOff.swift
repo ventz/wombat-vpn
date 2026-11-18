@@ -244,6 +244,12 @@ public struct HandOffDiagnosis: Equatable, Sendable {
     /// should. A refusal counts as reaching it.
     public var appNeverReachedExtension: Bool { requests == 0 && refusals.isEmpty }
 
+    /// The extension found its own XPC service missing from launchd: macOS replaced the extension
+    /// while the old one was still exiting, and the new one never got its service (ProviderHandOff
+    /// has the story). Restarting the extension can't fix that; restarting the Mac does, and
+    /// turning the extension off and on would also remove its VPNs.
+    public static let serviceMissingMessage = "macOS didn't finish updating the Wombat OpenConnect extension, so Wombat can't reach it to hand over this VPN's sign-in. Restart the Mac to fix it."
+
     public static let unreachableMessage = "Wombat couldn't reach the OpenConnect extension to hand over this VPN's sign-in. Turn “Wombat OpenConnect” off and on in System Settings › General › Login Items & Extensions › Extensions › Network Extensions (ⓘ), then connect again. If that doesn't help, restart the Mac."
 }
 
@@ -253,7 +259,8 @@ public enum HandOffTimeoutText {
     public static let openConnect = "Wombat didn't deliver this VPN's sign-in to the OpenConnect extension in time; try connecting again"
     public static let wireGuard = "Wombat didn't deliver this tunnel's configuration to the network extension in time; try connecting again"
     public static let tailnet = "Wombat didn't deliver this tailnet to the Tailnet extension in time; try connecting again"
-    public static let all = [openConnect, wireGuard, tailnet, HandOffDiagnosis.unreachableMessage, ExtensionSelfRestart.message]
+    public static let all = [openConnect, wireGuard, tailnet, HandOffDiagnosis.unreachableMessage, ExtensionSelfRestart.message,
+                             HandOffDiagnosis.serviceMissingMessage]
 
     /// The OpenConnect timeout with what the extension saw (its log lines may never reach the
     /// app once the session is stopping; the error text does, review S1).
@@ -286,7 +293,7 @@ public enum HandOffReport {
     }
 
     /// The extension's texts that carry advice of their own ("turn it off and on", "is restarting").
-    public static let adviceTexts = [HandOffDiagnosis.unreachableMessage, ExtensionSelfRestart.message]
+    public static let adviceTexts = [HandOffDiagnosis.unreachableMessage, ExtensionSelfRestart.message, HandOffDiagnosis.serviceMissingMessage]
 
     public static func reason(extensionReason: String, appNote: AppHandOffNote?) -> String {
         guard let appNote, !appNote.text.isEmpty, isHandOffTimeout(extensionReason) else { return extensionReason }

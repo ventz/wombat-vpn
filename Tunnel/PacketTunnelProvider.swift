@@ -212,7 +212,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         case .recentLog:
             completionHandler(Data(recentLog.lines().joined(separator: "\n").utf8))
-        case .openConnectStatus, .tailnetStatus, .tailnetLogin, .tailnetLogout:
+        case .openConnectStatus, .tailnetStatus, .tailnetLogin, .tailnetLogout, .openConnectHandOff:
             completionHandler(nil)  // the other extensions'
         }
     }

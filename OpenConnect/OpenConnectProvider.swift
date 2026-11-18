@@ -36,6 +36,9 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
     /// a start made by macOS (System Settings), which then can't use a session the app sent for
     /// one of its own connects. Never logged.
     private var startNonce: String?
+    /// This start waits for the app's hand-off (under `stateLock`): only then does the backup
+    /// route (`ProviderHandOff`) take a profile and session.
+    private var awaitingHandOff = false
 
     private var store: OpenConnectStore { SecretStore.shared as! OpenConnectStore }
 
@@ -51,13 +54,13 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
         let provider = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
         guard let id = provider?[ProviderConfigKey.tunnelID] as? String else { return handler(ProviderError.ns(OpenConnectError.missingConfiguration)) }
         let revision = provider?[ProviderConfigKey.revision] as? String
-        tunnelID = id
+        stateLock.withLock { tunnelID = id }
         // Per-start state, reset in case macOS ever reuses a provider instance (review S6).
         startedAt = Date()
         stopRequestedAt = nil
         sessionGeneration = nil
         handOffDiagnosis = nil
-        startNonce = options?[StartOption.startNonce] as? String
+        stateLock.withLock { startNonce = options?[StartOption.startNonce] as? String }
         let store = self.store
         let token = store.beginStart(for: id)
         startToken = token
@@ -71,8 +74,10 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
         // This start may be what launched the process: wait (at most 10 s) for the app to hand
         // over the profile and the session.
         if options?[StartOption.awaitHandOff] != nil, let revision {
+            stateLock.withLock { awaitingHandOff = true }
             waitForHandOff(id: id, revision: revision, attempt: 0) { [weak self] timedOut in
                 guard let self else { return completionHandler(OpenConnectError.canceled) }
+                self.stateLock.withLock { self.awaitingHandOff = false }
                 self.queue.async {
                     if timedOut { self.diagnoseHandOff(id: id, revision: revision) }
                     self.begin(id: id, revision: revision, token: token, handOffTimedOut: timedOut, completionHandler: completionHandler)
@@ -121,6 +126,12 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
     /// failing start's completion has reached NetworkExtension, and only if the check still holds
     /// then; the time is recorded right before it (no record, no exit).
     private func restartDecision(token: UInt64?) -> OpenConnectError {
+        // A fresh process can't help when launchd lost the service itself: only a restart of the
+        // Mac recreates it (and turning the extension off and on would also remove its VPNs).
+        if ServiceCheck.ownServiceMissing() {
+            log.error("Not restarting the OpenConnect extension: its XPC service is missing from launchd; the Mac needs a restart")
+            return .serviceMissing
+        }
         let since = startedAt.addingTimeInterval(-HandOffDiagnosis.lookback)
         let decision = ExtensionSelfRestart.decide(store.selfRestartInput(excluding: token, requestsSince: since))
         if case .stay(let reason) = decision {
@@ -405,6 +416,9 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
         guard let completionHandler else { return }
+        if let handOff = ProviderHandOff.parse(messageData) {
+            return queue.async { completionHandler(self.accept(handOff).encoded()) }
+        }
         guard messageData.count == 1, let message = ProviderMessage(rawValue: messageData[0]) else { return completionHandler(nil) }
         switch message {
         case .recentLog:
@@ -413,7 +427,43 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
             queue.async { completionHandler(try? JSONEncoder().encode(self.status())) }
         case .runtimeConfiguration, .tailnetStatus, .tailnetLogin, .tailnetLogout:
             completionHandler(nil)  // the other extensions'
+        case .openConnectHandOff:
+            completionHandler(nil)  // only with its JSON, parsed above
         }
+    }
+
+    /// The backup hand-off (`ProviderHandOff`): the profile and session for this start, sent as a
+    /// provider message because the app couldn't reach the XPC service. Only while this start
+    /// waits, only with its own nonce, tunnel and revision; stored for the owner its configuration
+    /// names, through the same checks as the XPC route. On the provider queue.
+    private func accept(_ handOff: ProviderHandOff) -> ProviderHandOffReply {
+        let missing = ServiceCheck.ownServiceMissing()
+        let provider = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
+        let revision = provider?[ProviderConfigKey.revision] as? String
+        let (waiting, tunnelID, nonce) = stateLock.withLock { (awaitingHandOff && !stopped, self.tunnelID, startNonce) }
+        // Not counted in the hand-off activity: the app sends this beside every waking connect,
+        // and counting it would hide "nothing from the app reached the extension", the verdict
+        // behind the self-restart and the advice (review 2026-11-18, Fable 1).
+        let refusal = missing ? handOff.refusal(waiting: waiting, tunnelID: tunnelID, revision: revision, nonce: nonce) : .serviceWorks
+        if let refusal {
+            log.error("Refused a hand-off by provider message: \(refusal.rawValue, privacy: .public)")
+            return ProviderHandOffReply(error: "The OpenConnect extension refused the hand-off (\(refusal.rawValue))",
+                                        serviceMissing: missing, refusal: refusal.rawValue)
+        }
+        guard let id = tunnelID, let revision, let uid = (provider?[ProviderConfigKey.ownerUID] as? NSNumber)?.uint32Value else {
+            return ProviderHandOffReply(error: "This VPN's configuration names no owner", serviceMissing: missing)
+        }
+        let startNonce = nonce
+        // The XPC route may have delivered it too: nothing more to do.
+        if store.hasSession(for: id, revision: revision, nonce: startNonce) { return ProviderHandOffReply(serviceMissing: missing) }
+        if store.revision(of: id) != .some(revision), let problem = store.storeForStart(id: id, text: handOff.profile, revision: revision, uid: uid) {
+            return ProviderHandOffReply(error: problem, serviceMissing: missing)
+        }
+        if let problem = store.storeSessionForStart(id: id, revision: revision, session: handOff.session, uid: uid) {
+            return ProviderHandOffReply(error: problem, serviceMissing: missing)
+        }
+        note("Received this VPN's sign-in by provider message" + (missing ? " (the extension's XPC service is missing: restart the Mac to fix it)" : ""))
+        return ProviderHandOffReply(serviceMissing: missing)
     }
 
     private func status() -> OpenConnectStatus {
@@ -520,6 +570,8 @@ enum OpenConnectError: LocalizedError {
     case handOffUnreachable
     /// As `handOffUnreachable`, and this process is quitting so macOS starts a fresh one.
     case handOffRestarting
+    /// As `handOffUnreachable`, and launchd has no XPC service for this extension (ServiceCheck).
+    case serviceMissing
     case canceled
     case invalidProfile(String)
     case signInRequired
@@ -536,6 +588,7 @@ enum OpenConnectError: LocalizedError {
         case .handOffTimedOut(let diagnosis): return HandOffTimeoutText.openConnect(diagnosis)
         case .handOffUnreachable: return HandOffDiagnosis.unreachableMessage
         case .handOffRestarting: return ExtensionSelfRestart.message
+        case .serviceMissing: return HandOffDiagnosis.serviceMissingMessage
         case .canceled: return "The start was canceled"
         case .invalidProfile(let s): return "Invalid profile: \(s)"
         case .signInRequired: return "Sign in from Wombat to connect this VPN"

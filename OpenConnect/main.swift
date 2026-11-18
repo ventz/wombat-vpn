@@ -1,5 +1,6 @@
 import Foundation
 import NetworkExtension
+import os
 import TunnelCore
 
 // The OpenConnect (Cisco AnyConnect) extension: its own process and sandbox container, so a
@@ -22,6 +23,14 @@ let listener = NSXPCListener(machServiceName: AppIdentity.openConnectMachService
 listener.setConnectionCodeSigningRequirement(CodeSigning.app)
 listener.delegate = SecretStore.shared
 listener.resume()
+// Said once in the system log, publicly (no secrets): the one line that tells this state apart.
+// Logged either way (review security-11 L6: shows whether the check sees the broken state).
+if ServiceCheck.ownServiceMissing() {
+    Logger(subsystem: AppIdentity.logSubsystem, category: "openconnect")
+        .error("This extension's XPC service is missing from launchd (macOS replaced the extension while the old one was exiting); connects use the backup hand-off until the Mac restarts")
+} else {
+    Logger(subsystem: AppIdentity.logSubsystem, category: "openconnect").notice("This extension's XPC service is registered")
+}
 
 autoreleasepool {
     NEProvider.startSystemExtensionMode()

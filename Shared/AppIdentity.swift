@@ -42,6 +42,10 @@ enum ProviderMessage: UInt8 {
     case tailnetLogin = 4
     /// Tailnet extension only: sign out (the server expires the node key). Reply as for login.
     case tailnetLogout = 5
+    /// OpenConnect extension only: the backup hand-off (`ProviderHandOff`: this byte, then JSON
+    /// with the profile and session for the start that is waiting). Reply: `ProviderHandOffReply`.
+    /// Never sent as a single byte; the other extensions refuse anything longer than one byte.
+    case openConnectHandOff = 6
 }
 
 /// providerConfiguration keys. Holds no secrets: /Library/Preferences/com.apple.networkextension.plist

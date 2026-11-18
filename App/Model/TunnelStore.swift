@@ -57,6 +57,10 @@ final class Tunnel: ObservableObject, Identifiable {
     /// back after every copy of the extension's log, which doesn't have them (review S2).
     private(set) var appLogLines: [String] = []
 
+    /// The start (`startCount`) whose sign-in went over by provider message (ProviderHandOff):
+    /// the XPC route's "didn't start" verdict doesn't apply to it.
+    var backupHandOffStart: Int?
+
     func markStart() -> (count: Int, at: Date) {
         startCount += 1
         stoppedByApp = false
@@ -1117,6 +1121,20 @@ final class TunnelStore: ObservableObject {
         session.startNonce = nonce
         options[StartOption.startNonce] = nonce as NSString
         var wakesExtension = false
+        // The profile text for the backup route, read with the revision it belongs to (review
+        // security-11 L3); an edit after this makes the extension refuse the mismatch.
+        let profileText = tunnel.proto?.passwordReference.flatMap { try? ConfigKeychain.read($0) }
+        #if WOMBAT_TEST_BACKUP_HANDOFF
+        // Test builds only (scripts/build-signed.sh): hand over ONLY by provider message, as when
+        // macOS left the extension without its XPC service.
+        log.notice("Test build: handing \(tunnel.name, privacy: .public) over by provider message only")
+        options[StartOption.awaitHandOff] = true as NSNumber
+        let testStart = tunnel.markStart()
+        try tunnel.manager.connection.startVPNTunnel(options: options)
+        tunnel.lastError = nil
+        Task { await providerHandOff(tunnel, start: testStart, session: session, revision: revision, profile: profileText) }
+        return
+        #endif
         switch await ExtensionSecrets.has(.openConnect, id: tunnel.id, revision: revision) {
         case .notRunning:
             wakesExtension = true
@@ -1133,8 +1151,59 @@ final class TunnelStore: ObservableObject {
         let start = tunnel.markStart()
         try tunnel.manager.connection.startVPNTunnel(options: options)
         tunnel.lastError = nil
-        if wakesExtension { Task { await handOffAfterLaunch(tunnel, start: start, session: session, revision: revision) } }
+        if wakesExtension {
+            Task { await handOffAfterLaunch(tunnel, start: start, session: session, revision: revision) }
+            Task { await providerHandOff(tunnel, start: start, session: session, revision: revision, profile: profileText) }
+        }
     }
+
+    /// The backup hand-off (`ProviderHandOff`): the profile and this start's session as a provider
+    /// message, for when the extension's XPC service is unreachable. macOS can leave a replaced
+    /// extension without its service until the Mac restarts (2026-11-18), and then every connect
+    /// failed. Runs beside the XPC route; the extension takes whichever arrives first and only
+    /// for this start (its nonce). Sent only while the session is connecting, never to a stopped
+    /// one (a message to a disconnected session relaunches the extension).
+    private func providerHandOff(_ tunnel: Tunnel, start: (count: Int, at: Date), session: AnyConnectSession, revision: String, profile: String?) async {
+        guard let profile,
+              let message = ProviderHandOff(id: tunnel.id.uuidString, revision: revision, profile: profile, session: session).message() else { return }
+        // Inside the extension's 10 s wait. A reply that doesn't decode (an extension from before
+        // this route) ends it after a few tries instead of resending for the whole wait.
+        let deadline = start.at.addingTimeInterval(9)
+        var undecodable = 0
+        while Date() < deadline, tunnel.startCount == start.count, undecodable < 3 {
+            let connection = tunnel.manager.connection
+            switch connection.status {
+            case .connecting:
+                guard let providerSession = connection as? NETunnelProviderSession else { return }
+                let raw = await send(message, to: providerSession)
+                if raw != nil, ProviderHandOffReply.decode(raw) == nil { undecodable += 1 }
+                if let reply = ProviderHandOffReply.decode(raw) {
+                    if reply.serviceMissing {
+                        log.error("The OpenConnect extension's XPC service is missing; the Mac needs a restart")
+                        extensionProblem = Self.openConnectServiceMissing
+                    }
+                    if reply.isWorthRetrying {
+                        break  // sent before the start's wait began: again in a moment (L1)
+                    } else if let error = reply.error {
+                        // "service works" is the normal answer: the XPC route carries it.
+                        log.notice("Provider-message hand-off for \(tunnel.name, privacy: .public) not used: \(error, privacy: .public)")
+                    } else {
+                        tunnel.backupHandOffStart = start.count
+                        log.notice("Handed \(tunnel.name, privacy: .public)'s sign-in over by provider message")
+                    }
+                    return
+                }
+            case .disconnected, .invalid:
+                // Not started yet right after startVPNTunnel; given up once it has ended.
+                if Date().timeIntervalSince(start.at) > 2 { return }
+            default:
+                return  // connected or stopping: nothing to hand over
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+    }
+
+    static let openConnectServiceMissing = "macOS didn't finish updating the Wombat OpenConnect extension. AnyConnect VPNs still connect, but other changes can't reach the extension. Restart the Mac to fix it."
 
     private static func revision(_ tunnel: Tunnel) -> String {
         tunnel.proto?.providerConfiguration?[ProviderConfigKey.revision] as? String ?? ""
@@ -1186,6 +1255,10 @@ final class TunnelStore: ObservableObject {
             log.error("The extension did not answer within 12 s, but \(tunnel.name, privacy: .public) is up")
         case .superseded:
             log.notice("Hand-off for an earlier start of \(tunnel.name, privacy: .public) dropped")
+        case .extensionNotRunning where tunnel.backupHandOffStart == start.count:
+            // The sign-in went over by provider message; the XPC service is the missing part,
+            // which the banner reports (review 2026-11-18, Fable 4).
+            log.error("The extension's XPC service didn't answer within 12 s; the sign-in went over by provider message")
         case .extensionNotRunning:
             log.error("The extension did not start within 12 s")
             tunnel.noteHandOff(.unreachable("the \(tunnel.engine.name)'s service didn't answer Wombat for 12 s"))
@@ -1364,9 +1437,13 @@ final class TunnelStore: ObservableObject {
     }
 
     private func send(_ message: ProviderMessage, to session: NETunnelProviderSession) async -> Data? {
+        await send(Data([message.rawValue]), to: session)
+    }
+
+    private func send(_ data: Data, to session: NETunnelProviderSession) async -> Data? {
         await withCheckedContinuation { continuation in
             do {
-                try session.sendProviderMessage(Data([message.rawValue])) { reply in
+                try session.sendProviderMessage(data) { reply in
                     continuation.resume(returning: reply)
                 }
             } catch {

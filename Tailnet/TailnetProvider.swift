@@ -325,7 +325,7 @@ final class TailnetProvider: NEPacketTunnelProvider {
                     completionHandler(TailnetCommandReply(error: error.localizedDescription).encoded)
                 }
             }
-        case .runtimeConfiguration, .openConnectStatus:
+        case .runtimeConfiguration, .openConnectStatus, .openConnectHandOff:
             completionHandler(nil)  // the other extensions'
         }
     }

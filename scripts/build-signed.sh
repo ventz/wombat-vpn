@@ -50,13 +50,23 @@ identities=$(security find-identity -v -p codesigning)
 command rm -rf "$out"
 mkdir -p "$out"
 
+# WOMBAT_TEST_BACKUP_HANDOFF=1: a TEST build whose OpenConnect extension acts as if its XPC
+# service were missing and whose app hands over only by provider message (ProviderHandOff), to
+# prove the backup route on a device. Never released: release.sh refuses the variable.
+test_conditions=""
+if [[ "${WOMBAT_TEST_BACKUP_HANDOFF:-}" == 1 ]]; then
+    test_conditions="WOMBAT_TEST_BACKUP_HANDOFF"
+    echo "build-signed.sh: TEST BUILD (backup hand-off forced); never release it" >&2
+fi
+
 say "Archiving (Release, universal)"
 xcodegen generate >/dev/null
 # Output goes to a log: xcodebuild is very verbose and the errors are what matter.
 if ! xcodebuild archive -project Wombat.xcodeproj -scheme Wombat -configuration Release \
         -destination "generic/platform=macOS" -derivedDataPath build/DerivedDataRelease \
         -archivePath "$archive" -allowProvisioningUpdates \
-        NE_PACKET_TUNNEL=packet-tunnel-provider >"$out/archive.log" 2>&1; then
+        NE_PACKET_TUNNEL=packet-tunnel-provider ${test_conditions:+"SWIFT_ACTIVE_COMPILATION_CONDITIONS=\$(inherited) $test_conditions"} \
+        >"$out/archive.log" 2>&1; then
     grep -E ' error: |error: ' "$out/archive.log" >&2 || tail -20 "$out/archive.log" >&2
     echo "archive failed; full log: $out/archive.log" >&2
     echo "(\"Unable to log in with account\": sign out and back in under Xcode › Settings › Accounts)" >&2
@@ -181,6 +191,14 @@ for code in "$app" "${extensions[@]}" "$app/Contents/Helpers/wombat"; do
     codesign --verify -R="$DEVELOPER_ID_REQ" "$code" || { echo "does not satisfy the Developer ID requirement: $code" >&2; exit 1; }
 done
 echo "app, all three extensions and CLI: Developer ID, hardened runtime, no get-task-allow or runtime exceptions, NE entitlement for system extensions"
+
+# A test build (WOMBAT_TEST_BACKUP_HANDOFF) and a real one must never be mixed up: the real one
+# may not carry the test code's marker, and a test build should use a build number that is never
+# released, since the extension only updates to a higher one (review 2026-11-18, Fable 3).
+if [[ -z "$test_conditions" ]] && LC_ALL=C grep -aq "Test build: handing" "$app/Contents/MacOS/Wombat"; then
+    echo "build-signed.sh: this build contains test-only code (WOMBAT_TEST_BACKUP_HANDOFF); refusing" >&2
+    exit 1
+fi
 
 say "Checking bundle contents"
 # XcodeGen copies every file in a source folder into the bundle, gitignored ones included, so a

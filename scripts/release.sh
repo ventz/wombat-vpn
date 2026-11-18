@@ -181,6 +181,10 @@ echo "Sparkle key matches SUPublicEDKey"
 # grants the system-extension entitlement), audits every signature, notarizes and staples the app.
 
 say "Building (Developer ID, notarized)"
+if [[ -n "${WOMBAT_TEST_BACKUP_HANDOFF:-}" ]]; then
+    echo "release.sh: WOMBAT_TEST_BACKUP_HANDOFF is set; a test build must never be released (unset it)" >&2
+    exit 1
+fi
 scripts/build-signed.sh
 app="$repo_root/build/signed/export/Wombat.app"
 [[ -d "$app" ]] || { echo "build produced no app at $app" >&2; exit 1; }

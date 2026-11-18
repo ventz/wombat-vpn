@@ -50,7 +50,24 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
         guard UUID(uuidString: id) != nil else { return nil }
         lock.lock(); defer { lock.unlock() }
         guard let data = try? Data(contentsOf: file(id)), let record = try? JSONDecoder().decode(Record.self, from: data) else { return nil }
+        removeCompleteProtection(id, data: data)
         return record.config
+    }
+
+    /// Records written before 1.4.4 carry complete file protection: unreadable while the Mac is
+    /// locked, so a locked Mac's start or hand-off failed on them (2026-11-18). Rewritten once,
+    /// the same bytes without it, the first time one is read. Under `lock`.
+    private func removeCompleteProtection(_ id: String, data: Data) {
+        let target = file(id)
+        guard let protection = try? FileManager.default.attributesOfItem(atPath: target.path)[.protectionKey] as? FileProtectionType,
+              protection == .complete || protection == .completeUnlessOpen else { return }
+        do {
+            try data.write(to: target, options: [.atomic, .noFileProtection])
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+            log.notice("Removed complete file protection from the record for \(id, privacy: .public)")
+        } catch {
+            log.error("Could not rewrite the record for \(id, privacy: .public): \(FileErrorDetail.describe(error), privacy: .public)")
+        }
     }
 
     // MARK: XPC
@@ -113,19 +130,41 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
             return reply("Configuration is not UTF-8 text under \(maxBytes / 1024) KB")
         }
         if let problem = validate(text) { noteRefusal(id, "invalid"); return reply("Invalid configuration: \(problem)") }
+        reply(write(id: id, text: text, revision: revision, uid: uid))
+    }
+
+    /// The backup hand-off route (`ProviderHandOff`): the provider stores its own start's profile,
+    /// for the owner its configuration names, with the same checks as `store`. nil on success.
+    func storeForStart(id: String, text: String, revision: String, uid: UInt32) -> String? {
+        guard UUID(uuidString: id) != nil, UUID(uuidString: revision) != nil else { return "Invalid tunnel id" }
+        guard text.utf8.count <= maxBytes else { return "Configuration too large" }
+        if let problem = validate(text) { return "Invalid configuration: \(problem)" }
+        return write(id: id, text: text, revision: revision, uid: uid)
+    }
+
+    /// Writes a tunnel's record for `uid`, refusing another user's tunnel or an unreadable record.
+    /// nil on success, else the reason.
+    private func write(id: String, text: String, revision: String, uid: UInt32) -> String? {
         lock.lock(); defer { lock.unlock() }
         // A record that exists but can't be read has an unknown owner: never replaced by anyone,
         // or another account could take over a damaged tunnel (review 2026-11-18). Its owner
         // deletes the tunnel and adds it again (remove allows that).
-        if case .unreadable = ownership(id) {
+        switch ownership(id) {
+        case .unavailable(let detail):
             noteRefusal(id, "owner")
-            log.error("Refused store for \(id, privacy: .public): the stored record can't be read")
-            return reply("The extension's copy of this tunnel is damaged. Delete the tunnel and add it again.")
+            log.error("Refused store for \(id, privacy: .public): the stored record can't be read now: \(detail, privacy: .public)")
+            return "The network extension can't read its copy of this tunnel right now (is the Mac locked?). Try again after unlocking it."
+        case .damaged:
+            noteRefusal(id, "owner")
+            log.error("Refused store for \(id, privacy: .public): the stored record is damaged")
+            return "The extension's copy of this tunnel is damaged. Delete the tunnel and add it again."
+        case .missing, .owned:
+            break
         }
         if let owner = ownerUID(id), owner != uid {
             noteRefusal(id, "owner")
             log.error("Refused store for \(id, privacy: .public): owned by uid \(owner, privacy: .public), caller \(uid, privacy: .public)")
-            return reply("This tunnel belongs to another user of this Mac")
+            return "This tunnel belongs to another user of this Mac"
         }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -137,12 +176,12 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
             try data.write(to: target, options: [.atomic])
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
             log.notice("Stored configuration for \(id, privacy: .public)")
-            reply(nil)
+            return nil
         } catch {
             let detail = FileErrorDetail.describe(error)
             noteRefusal(id, "save")
             log.error("Could not store \(id, privacy: .public): \(detail, privacy: .public)")
-            reply("Could not save: \(detail)")
+            return "Could not save: \(detail)"
         }
     }
 
@@ -151,6 +190,11 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
         guard let uid = callerUID() else { return reply("Unknown caller") }
         guard UUID(uuidString: id) != nil else { return reply("Invalid tunnel id") }
         lock.lock(); defer { lock.unlock() }
+        // A record that can't be read right now (a locked Mac) still has its owner: not
+        // removable by anyone until it can be read (review 2026-11-18, Fable 5).
+        if case .unavailable = ownership(id) {
+            return reply("The network extension can't read its copy of this tunnel right now (is the Mac locked?). Try again after unlocking it.")
+        }
         if let owner = ownerUID(id), owner != uid { return reply("This tunnel belongs to another user of this Mac") }
         do {
             if FileManager.default.fileExists(atPath: file(id).path) { try FileManager.default.removeItem(at: file(id)) }
@@ -210,15 +254,23 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
 
     func file(_ id: String) -> URL { directory.appendingPathComponent(id.lowercased() + ".json") }
 
-    enum Ownership: Equatable { case missing, owned(UInt32), unreadable }
+    enum Ownership: Equatable {
+        case missing, owned(UInt32)
+        /// The file exists but can't be read now. Records from before 1.4.4 carry complete file
+        /// protection and can't be read while the Mac is locked (seen 2026-11-18): not damage.
+        case unavailable(String)
+        /// Read, but not a record: damaged.
+        case damaged
+    }
 
-    /// "No record" and "a record nobody can read" are different answers: only the first means
-    /// nobody owns the tunnel.
+    /// "No record" and "a record that can't be read" are different answers: only the first
+    /// means nobody owns the tunnel.
     func ownership(_ id: String) -> Ownership {
         let path = file(id).path
         guard FileManager.default.fileExists(atPath: path) else { return .missing }
-        guard let data = try? Data(contentsOf: file(id)),
-              let record = try? JSONDecoder().decode(Record.self, from: data) else { return .unreadable }
+        let data: Data
+        do { data = try Data(contentsOf: file(id)) } catch { return .unavailable(FileErrorDetail.describe(error)) }
+        guard let record = try? JSONDecoder().decode(Record.self, from: data) else { return .damaged }
         return .owned(record.ownerUID)
     }
 

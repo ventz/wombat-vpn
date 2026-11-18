@@ -33,14 +33,28 @@ final class OpenConnectStore: SecretStore, OpenConnectStoreProtocol, @unchecked 
             return reply("Invalid session")
         }
         if let problem = session.validate() { noteRefusal(id, "invalid"); return reply(problem) }
+        reply(hold(session, key: key, id: id, revision: revision, uid: uid))
+    }
+
+    /// The backup hand-off route (`ProviderHandOff`): the provider holds its own start's session
+    /// for the owner its configuration names, with the same checks as `storeSession`.
+    func storeSessionForStart(id: String, revision: String, session: AnyConnectSession, uid: UInt32) -> String? {
+        guard let key = Self.key(id), UUID(uuidString: revision) != nil else { return "Invalid tunnel id" }
+        if let problem = session.validate() { return problem }
+        return hold(session, key: key, id: id, revision: revision, uid: uid)
+    }
+
+    /// Holds a session for its owner's tunnel at the profile revision it was signed in for.
+    /// nil on success, else the reason.
+    private func hold(_ session: AnyConnectSession, key: String, id: String, revision: String, uid: UInt32) -> String? {
         // Only for the caller's own tunnel, and only for the profile revision it signed in with.
-        guard let owner = owner(of: id) else { noteRefusal(id, "no-profile"); return reply("The extension has no profile for this tunnel yet") }
+        guard let owner = owner(of: id) else { noteRefusal(id, "no-profile"); return "The extension has no profile for this tunnel yet" }
         guard owner == uid else {
             noteRefusal(id, "owner")
             log.error("Refused a session for \(id, privacy: .public): owned by uid \(owner, privacy: .public), caller \(uid, privacy: .public)")
-            return reply("This tunnel belongs to another user of this Mac")
+            return "This tunnel belongs to another user of this Mac"
         }
-        guard self.revision(of: id) == .some(revision) else { noteRefusal(id, "revision"); return reply("The extension's copy of this VPN is out of date; try again") }
+        guard self.revision(of: id) == .some(revision) else { noteRefusal(id, "revision"); return "The extension's copy of this VPN is out of date; try again" }
         // Tokens handed over but never used go once they're too old to start (S5-I6).
         let generation = sessionLock.withLock { sessions.put(key, owner: uid, revision: revision, value: session, nonce: session.startNonce) }
         log.notice("Received a session for \(id, privacy: .public) (generation \(generation, privacy: .public))")
@@ -50,7 +64,7 @@ final class OpenConnectStore: SecretStore, OpenConnectStoreProtocol, @unchecked 
             guard let self else { return }
             self.sessionLock.withLock { self.sessions.pruneExpired() }
         }
-        reply(nil)
+        return nil
     }
 
     /// The session for a start: same owner and revision as the profile, recent, and signed in
