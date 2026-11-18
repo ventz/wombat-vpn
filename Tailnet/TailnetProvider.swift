@@ -44,7 +44,12 @@ final class TailnetProvider: NEPacketTunnelProvider {
         let revision = provider?[ProviderConfigKey.revision] as? String
         if options?[StartOption.awaitHandOff] != nil, let revision {
             waitForHandOff(id: id, revision: revision, attempt: 0) { [weak self] timedOut in
-                self?.queue.async { self?.begin(id: id, revision: revision, handOffTimedOut: timedOut, completionHandler: completionHandler) }
+                // A provider gone meanwhile still answers macOS (review 2026-11-18).
+                guard let queue = self?.queue else { return completionHandler(Self.nsError(TailnetError.canceled)) }
+                queue.async { [weak self] in
+                    guard let self else { return completionHandler(Self.nsError(TailnetError.canceled)) }
+                    self.begin(id: id, revision: revision, handOffTimedOut: timedOut, completionHandler: completionHandler)
+                }
             }
         } else {
             queue.async { self.begin(id: id, revision: revision, handOffTimedOut: false, completionHandler: completionHandler) }
@@ -88,8 +93,9 @@ final class TailnetProvider: NEPacketTunnelProvider {
         let initial = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: Self.remotePlaceholder)
         initial.mtu = NSNumber(value: TailnetNetworkPlan.defaultMTU)
         setTunnelNetworkSettings(initial) { [weak self] error in
-            self?.queue.async { [weak self] in
-                guard let self else { return }
+            guard let queue = self?.queue else { return completionHandler(Self.nsError(TailnetError.canceled)) }
+            queue.async { [weak self] in
+                guard let self else { return completionHandler(Self.nsError(TailnetError.canceled)) }
                 if self.isStopped { return completionHandler(Self.nsError(TailnetError.canceled)) }
                 if let error { return self.fail("Could not apply network settings", TailnetError.networkSettings(error.localizedDescription), completionHandler) }
                 let fd: UtunClaim

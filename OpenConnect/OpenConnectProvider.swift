@@ -212,8 +212,19 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
         }
 
         setTunnelNetworkSettings(Self.networkSettings(plan, remote: session.address, localDiscovery: localDiscovery)) { [weak self] error in
-            self?.queue.async { [weak self] in
-                guard let self else { return }
+            guard let queue = self?.queue else {
+                // The provider is gone: end this start, or its token would count as running
+                // forever and block the self-restart (review 2026-11-18).
+                engine.logOffWithoutTunnel()
+                engine.shutdown()
+                return completionHandler(OpenConnectError.canceled)
+            }
+            queue.async { [weak self] in
+                guard let self else {
+                    engine.logOffWithoutTunnel()
+                    engine.shutdown()
+                    return completionHandler(OpenConnectError.canceled)
+                }
                 // A stop while macOS applied the settings wins: nothing may start after it (Q5-M1).
                 if self.isStopped {
                     self.teardown(id, engine)
@@ -313,9 +324,20 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
         }
         queue.async { [weak self] in
             guard let self, next != self.plan else { return }
-            self.plan = next
+            // The plan changes only once macOS has applied it, and a failure ends the tunnel:
+            // routes the gateway now expects must not flow outside it while the status says
+            // they're covered (review 2026-11-18).
             self.setTunnelNetworkSettings(Self.networkSettings(next, remote: self.gateway, localDiscovery: self.localDiscovery)) { [weak self] error in
-                if let error { self?.note("Could not apply the gateway's new settings: \(error.localizedDescription)") }
+                self?.queue.async { [weak self] in
+                    guard let self, !self.isStopped else { return }
+                    if let error {
+                        self.note("Could not apply the gateway's new settings: \(error.localizedDescription); disconnecting")
+                        self.stateLock.withLock { self.current }?.stop()
+                        self.cancelTunnelWithError(ProviderError.ns(OpenConnectError.networkSettings(error.localizedDescription)))
+                        return
+                    }
+                    self.plan = next
+                }
             }
         }
     }

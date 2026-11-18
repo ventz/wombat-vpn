@@ -114,6 +114,14 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
         }
         if let problem = validate(text) { noteRefusal(id, "invalid"); return reply("Invalid configuration: \(problem)") }
         lock.lock(); defer { lock.unlock() }
+        // A record that exists but can't be read has an unknown owner: never replaced by anyone,
+        // or another account could take over a damaged tunnel (review 2026-11-18). Its owner
+        // deletes the tunnel and adds it again (remove allows that).
+        if case .unreadable = ownership(id) {
+            noteRefusal(id, "owner")
+            log.error("Refused store for \(id, privacy: .public): the stored record can't be read")
+            return reply("The extension's copy of this tunnel is damaged. Delete the tunnel and add it again.")
+        }
         if let owner = ownerUID(id), owner != uid {
             noteRefusal(id, "owner")
             log.error("Refused store for \(id, privacy: .public): owned by uid \(owner, privacy: .public), caller \(uid, privacy: .public)")
@@ -202,9 +210,21 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
 
     func file(_ id: String) -> URL { directory.appendingPathComponent(id.lowercased() + ".json") }
 
+    enum Ownership: Equatable { case missing, owned(UInt32), unreadable }
+
+    /// "No record" and "a record nobody can read" are different answers: only the first means
+    /// nobody owns the tunnel.
+    func ownership(_ id: String) -> Ownership {
+        let path = file(id).path
+        guard FileManager.default.fileExists(atPath: path) else { return .missing }
+        guard let data = try? Data(contentsOf: file(id)),
+              let record = try? JSONDecoder().decode(Record.self, from: data) else { return .unreadable }
+        return .owned(record.ownerUID)
+    }
+
     func ownerUID(_ id: String) -> UInt32? {
-        guard let data = try? Data(contentsOf: file(id)) else { return nil }
-        return (try? JSONDecoder().decode(Record.self, from: data))?.ownerUID
+        if case .owned(let uid) = ownership(id) { return uid }
+        return nil
     }
 
     func callerUID() -> UInt32? {

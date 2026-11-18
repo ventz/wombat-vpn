@@ -1036,7 +1036,9 @@ final class TunnelStore: ObservableObject {
         // hand, and before it is handed over (the extension's stop drops its session) (Q5-M8).
         if tunnel.isActive {
             tunnel.manager.connection.stopVPNTunnel()
-            for _ in 0..<80 where tunnel.status != .disconnected {
+            // Up to 12 s: the OpenConnect extension's stop can take 10 s (two 5 s goodbye waits),
+            // and handing over while it still runs was racing its cleanup (review 2026-11-18).
+            for _ in 0..<120 where tunnel.status != .disconnected {
                 try? await Task.sleep(for: .milliseconds(100))
                 tunnel.refreshStatus()
             }
