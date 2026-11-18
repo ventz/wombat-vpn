@@ -16,8 +16,8 @@ final class TailnetProvider: NEPacketTunnelProvider {
     private var handle: Int32?
     private var token: Int64?
     /// NetworkExtension's utun descriptor and the engine's copy, claimed until the stop.
-    private var claimedFD: Int32?
-    private var engineFD: Int32?
+    private var claimedDevice: UtunClaim?
+    private var engineDevice: UtunClaim?
     private var profile: TailnetProfile?
     private var tunnelID: String?
     private var stateDirectory: URL?
@@ -92,9 +92,14 @@ final class TailnetProvider: NEPacketTunnelProvider {
                 guard let self else { return }
                 if self.isStopped { return completionHandler(Self.nsError(TailnetError.canceled)) }
                 if let error { return self.fail("Could not apply network settings", TailnetError.networkSettings(error.localizedDescription), completionHandler) }
-                guard let fd = TunnelDevice.claim() else { return self.fail("Could not find the tunnel device", TailnetError.noTunnelDevice, completionHandler) }
-                let copy = TunnelDevice.duplicateAndClaim(fd)
-                guard copy >= 0 else {
+                let fd: UtunClaim
+                switch TunnelDevice.claim() {
+                case .success(let claim): fd = claim
+                case .failure(let lookup):
+                    self.note("Tunnel device lookup: \(lookup)")
+                    return self.fail("Could not find the tunnel device", TailnetError.noTunnelDevice, completionHandler)
+                }
+                guard let copy = TunnelDevice.duplicateAndClaim(fd) else {
                     TunnelDevice.release(fd)
                     return self.fail("Could not find the tunnel device", TailnetError.noTunnelDevice, completionHandler)
                 }
@@ -103,12 +108,12 @@ final class TailnetProvider: NEPacketTunnelProvider {
                     plan: { [weak self] data in self?.queue.async { self?.apply(planJSON: data) } }))
                 do {
                     let handle = try TailnetEngine.start(stateDirectory: stateDirectory, control: profile.controlURL,
-                                                         hostname: profile.hostname, acceptDNS: profile.acceptDNS, tunFD: copy, token: token)
+                                                         hostname: profile.hostname, acceptDNS: profile.acceptDNS, tunFD: copy.fd, token: token)
                     let stoppedMeanwhile = self.stateLock.withLock { () -> Bool in
                         self.handle = handle
                         self.token = token
-                        self.claimedFD = fd
-                        self.engineFD = copy
+                        self.claimedDevice = fd
+                        self.engineDevice = copy
                         return self.stopped
                     }
                     if stoppedMeanwhile {
@@ -124,7 +129,7 @@ final class TailnetProvider: NEPacketTunnelProvider {
                     TunnelDevice.release(fd)    // NetworkExtension owns it
                     return self.fail("Could not start the tailnet engine", error, completionHandler)
                 }
-                self.note("Tailnet engine \(TailnetEngine.version) up on \(TunnelDevice.name(fd) ?? "utun"); coordination server \(profile.displayServer)")
+                self.note("Tailnet engine \(TailnetEngine.version) up on \(TunnelDevice.name(fd.fd) ?? "utun"); coordination server \(profile.displayServer)")
                 completionHandler(nil)
             }
         }
@@ -145,7 +150,7 @@ final class TailnetProvider: NEPacketTunnelProvider {
                                                control: profile.controlURL, pinnedSuffix: pinned)
         } catch {
             note("Refused the coordination server's network settings: \(error.localizedDescription)")
-            cancelTunnelWithError(Self.nsError(TailnetError.invalidPlan(error.localizedDescription)))
+            end(.invalidPlan(error.localizedDescription))
             return
         }
         // The first MagicDNS name this tailnet uses is the one it keeps (security-9-astra S9-1).
@@ -179,7 +184,7 @@ final class TailnetProvider: NEPacketTunnelProvider {
                 self.applying = false
                 if let error {
                     self.note("Could not apply the network settings: \(error.localizedDescription)")
-                    self.cancelTunnelWithError(Self.nsError(TailnetError.networkSettings(error.localizedDescription)))
+                    self.end(.networkSettings(error.localizedDescription))
                     return
                 }
                 if let waiting = self.pendingPlanJSON {
@@ -235,10 +240,10 @@ final class TailnetProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        let (handle, token, fd, copy) = stateLock.withLock { () -> (Int32?, Int64?, Int32?, Int32?) in
+        let (handle, token, fd, copy) = stateLock.withLock { () -> (Int32?, Int64?, UtunClaim?, UtunClaim?) in
             stopped = true
-            defer { self.handle = nil; self.token = nil; claimedFD = nil; engineFD = nil }
-            return (self.handle, self.token, claimedFD, engineFD)
+            defer { self.handle = nil; self.token = nil; claimedDevice = nil; engineDevice = nil }
+            return (self.handle, self.token, claimedDevice, engineDevice)
         }
         stopOwnerWatch()
         note("Stopping tunnel (reason \(reason.rawValue))")
@@ -250,9 +255,9 @@ final class TailnetProvider: NEPacketTunnelProvider {
 
     /// Stops an engine and releases its utun claims. Takes the values out of the state first, so
     /// it runs once per engine. On the provider queue.
-    private func teardown(handle: Int32?, token: Int64?, fd: Int32?, copy: Int32?) {
+    private func teardown(handle: Int32?, token: Int64?, fd: UtunClaim?, copy: UtunClaim?) {
         stateLock.withLock {
-            if self.handle == handle { self.handle = nil; self.token = nil; claimedFD = nil; engineFD = nil }
+            if self.handle == handle { self.handle = nil; self.token = nil; claimedDevice = nil; engineDevice = nil }
         }
         if let handle { TailnetEngine.stop(handle) }  // closes the engine's copy of the utun
         if let token { TailnetEngine.unregister(token) }
@@ -260,6 +265,19 @@ final class TailnetProvider: NEPacketTunnelProvider {
         if let fd { TunnelDevice.release(fd) }
         plan = nil
         pendingPlanJSON = nil
+    }
+
+    /// Ends the tunnel from inside: the engine and its utun claims go first, since macOS may not
+    /// call stopTunnel after cancelTunnelWithError, and a node left running made every later
+    /// start fail with "another tailnet is already running" (review 2026-11-18). On the provider
+    /// queue.
+    private func end(_ error: TailnetError) {
+        let (handle, token, fd, copy) = stateLock.withLock { () -> (Int32?, Int64?, UtunClaim?, UtunClaim?) in
+            defer { self.handle = nil; self.token = nil; claimedDevice = nil; engineDevice = nil }
+            return (self.handle, self.token, claimedDevice, engineDevice)
+        }
+        teardown(handle: handle, token: token, fd: fd, copy: copy)
+        cancelTunnelWithError(Self.nsError(error))
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
@@ -334,7 +352,7 @@ final class TailnetProvider: NEPacketTunnelProvider {
         guard ConsoleOwner.mayStart(owner: owner, onDemandStart: false) else { throw TailnetError.notOwner }
         guard let watch = ConsoleOwnerWatch(owner: owner, onOtherUser: { [weak self] in
             self?.note("Another user took the screen; stopping the tailnet")
-            self?.cancelTunnelWithError(Self.nsError(TailnetError.notOwner))
+            self?.queue.async { self?.end(.notOwner) }
         }) else { throw TailnetError.notOwner }
         let previous: ConsoleOwnerWatch?? = stateLock.withLock {
             if stopped { return .none }

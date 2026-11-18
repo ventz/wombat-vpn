@@ -164,16 +164,19 @@ final class OpenConnectEngine: @unchecked Sendable {
 
     /// Hands libopenconnect the utun device and runs its main loop on a thread of its own until
     /// the tunnel ends. `onExit` gets nil for a requested stop, else the reason.
-    func start(tunnelFD: Int32, onExit: @escaping @Sendable (String?) -> Void) throws {
+    func start(tunnel: UtunClaim, onExit: @escaping @Sendable (String?) -> Void) throws {
         guard let vpn else { throw Failure(errorDescription: "The tunnel isn't connected") }
         // libopenconnect gets its own descriptor for NetworkExtension's utun socket, and the
         // engine closes exactly that one; NetworkExtension's stays NetworkExtension's (S5B-L4).
         // The copy is a utun socket too: claimed as it is made, so another tunnel's lookup skips
         // it (S5C, review NEW-10).
-        let ownFD = TunnelDevice.duplicateAndClaim(tunnelFD)
-        guard ownFD >= 0 else { throw Failure(errorDescription: "Could not use the tunnel device") }
+        // Below FD_SETSIZE: libopenconnect select()s on it (an fd_set holds 1024 descriptors).
+        guard let own = TunnelDevice.duplicateAndClaim(tunnel, below: Int32(FD_SETSIZE)) else {
+            throw Failure(errorDescription: "Could not use the tunnel device")
+        }
+        let ownFD = own.fd
         guard openconnect_setup_tun_fd(vpn, ownFD) == 0 else {
-            TunnelDevice.closeAndRelease(ownFD)
+            TunnelDevice.closeAndRelease(own)
             throw Failure(errorDescription: "libopenconnect could not use the tunnel device")
         }
         lock.withLock { running = true }
@@ -206,7 +209,7 @@ final class OpenConnectEngine: @unchecked Sendable {
             }
             let requested = lock.withLock { stopRequested }
             // libopenconnect only closes the tun descriptor when it ran a vpnc-script.
-            TunnelDevice.closeAndRelease(ownFD)
+            TunnelDevice.closeAndRelease(own)
             lock.withLock { running = false; sessionOpen = false }  // only after the close (S5B-L4)
             let detail = lock.withLock { lastErrorLine }
             onExit(requested ? nil : Self.describe(result) + (detail.map { "; last engine error: \($0)" } ?? ""))

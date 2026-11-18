@@ -17,7 +17,7 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
     /// The tunnel's engine; under stateLock (stop reads it while the queue may be connecting).
     private var current: OpenConnectEngine?
     /// NetworkExtension's utun descriptor, claimed until this tunnel has fully stopped.
-    private var claimedFD: Int32?
+    private var claimedDevice: UtunClaim?
     private var tunnelID: String?
     private var plan: OpenConnectNetworkPlan?
     private var gateway: String?
@@ -224,16 +224,20 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
                     self.fail("Could not apply network settings", OpenConnectError.networkSettings(error.localizedDescription), completionHandler)
                     return
                 }
-                guard let fd = TunnelDevice.claim() else {
+                let device: UtunClaim
+                switch TunnelDevice.claim() {
+                case .success(let claim): device = claim
+                case .failure(let lookup):
+                    self.note("Tunnel device lookup: \(lookup)")
                     self.teardown(id, engine)
                     self.fail("Could not find the tunnel device", OpenConnectError.noTunnelDevice, completionHandler)
                     return
                 }
-                self.claimedFD = fd
+                self.claimedDevice = device
                 do {
                     let generation = self.sessionGeneration
                     let store = self.store
-                    try engine.start(tunnelFD: fd) { [weak self] reason in
+                    try engine.start(tunnel: device) { [weak self] reason in
                         // The tunnel no longer runs here, whether or not stopTunnel follows (S2).
                         if reason != nil, let token { store.finishStart(token) }
                         // The engine closed its own copy of the descriptor; the claim on
@@ -241,20 +245,28 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
                         // goes: the loop can end after the app handed over a new one.
                         if let generation { self?.store.dropSession(for: id, generation: generation) }
                         self?.queue.async { engine.shutdown() }
+                        // Ended on its own: the claim on NetworkExtension's utun goes now, not in
+                        // a stopTunnel that macOS may never call after cancelTunnelWithError (a
+                        // claim left behind hid the next utun: 1.4.6 report, 2026-11-18). release
+                        // only drops this claim, so a newer tunnel's on a reused number stays.
+                        if reason != nil {
+                            TunnelDevice.release(device)
+                            self?.endedOnItsOwn(device)
+                        }
                         guard let self, let reason else { return }
                         // The gateway ended it, or reconnecting failed for 5 minutes.
                         self.note("Tunnel ended: \(reason)")
                         self.cancelTunnelWithError(ProviderError.ns(OpenConnectError.engine(reason)))
                     }
                 } catch {
-                    self.claimedFD = nil
-                    TunnelDevice.release(fd)  // NetworkExtension owns the descriptor
+                    self.claimedDevice = nil
+                    TunnelDevice.release(device)  // NetworkExtension owns the descriptor
                     self.teardown(id, engine)
                     self.fail("Could not start", error, completionHandler)
                     return
                 }
                 self.connectedSince = Date()
-                self.note("Tunnel up on \(TunnelDevice.name(fd) ?? "utun")")
+                self.note("Tunnel up on \(TunnelDevice.name(device.fd) ?? "utun")")
                 self.watchPath()
                 completionHandler(nil)
             }
@@ -262,6 +274,17 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
     }
 
     private var isStopped: Bool { stateLock.withLock { stopped } }
+
+    /// The engine ended without a stop request: its claim is already released; forget it here
+    /// and stop watching the network (on the provider queue).
+    private func endedOnItsOwn(_ device: UtunClaim) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            if self.claimedDevice == device { self.claimedDevice = nil }
+            self.pathMonitor?.cancel()
+            self.pathMonitor = nil
+        }
+    }
 
     /// Ends a tunnel that never reached its main loop: the gateway still gets its logoff, and
     /// the token goes. On the provider queue.
@@ -350,9 +373,9 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
             }
             if let engine, let id { self.teardown(id, engine) } else if let id { self.dropOwnSession(id) }
             if let token = self.startToken { self.store.finishStart(token) }
-            if let fd = self.claimedFD {
-                TunnelDevice.release(fd)
-                self.claimedFD = nil
+            if let device = self.claimedDevice {
+                TunnelDevice.release(device)
+                self.claimedDevice = nil
             }
             completionHandler()
         }

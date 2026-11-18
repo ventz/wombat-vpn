@@ -64,28 +64,61 @@ public class WireGuardAdapter {
     /// at once (a tunnel starting while another is still stopping). Each adapter claims the
     /// socket it found and others skip it, so tunnel B can never pick up tunnel A's packets
     /// (audit WOM-02). The claim is released when the adapter goes away.
+    /// Wombat: a claim records the kernel socket (`soi_so`) beside the number, the same rules as
+    /// TunnelCore's `UtunClaims` (reviews 2026-11-18): a claim on a number that now holds another
+    /// socket is stale (it hid the next utun: "Could not find the tunnel device" until the
+    /// process exited, 1.4.6 report); a descriptor sharing a claimed socket under another number
+    /// is skipped (the Go bridge dup()s the utun without telling Swift); a release removes only
+    /// its own claim, so a late deinit can't free a newer tunnel's claim on a reused number;
+    /// unknown identity (0) keeps a claim (fail closed).
     private static let claimLock = NSLock()
-    private static var claimedDescriptors = Set<Int32>()
+    private static var claimedDescriptors = [Int32: UInt64]()
     private var claimedDescriptor: Int32?
+    private var claimedSocket: UInt64 = 0
 
     /// Tunnel device file descriptor.
     private var tunnelFileDescriptor: Int32? {
         Self.claimLock.lock(); defer { Self.claimLock.unlock() }
         if let claimedDescriptor { return claimedDescriptor }
-        guard let fd = Self.findTunnelFileDescriptor(excluding: Self.claimedDescriptors) else { return nil }
-        Self.claimedDescriptors.insert(fd)
+        for fd in Self.claimedDescriptors.keys where fcntl(fd, F_GETFD) == -1 && errno == EBADF {
+            Self.claimedDescriptors[fd] = nil  // closed: the claim is stale
+        }
+        guard let fd = Self.findTunnelFileDescriptor() else { return nil }
+        let socket = Self.socketID(fd)
+        Self.claimedDescriptors[fd] = socket
         claimedDescriptor = fd
+        claimedSocket = socket
         return fd
     }
 
-    private static func findTunnelFileDescriptor(excluding claimed: Set<Int32>) -> Int32? {
+    /// Wombat: the kernel socket behind a descriptor, 0 when unknown.
+    private static func socketID(_ fd: Int32) -> UInt64 {
+        var info = socket_fdinfo()
+        let size = Int32(MemoryLayout<socket_fdinfo>.size)
+        guard proc_pidfdinfo(getpid(), fd, PROC_PIDFDSOCKETINFO, &info, size) == size else { return 0 }
+        return info.psi.soi_so
+    }
+
+    /// Wombat: whether a claim hides `fd`. Called under `claimLock`.
+    private static func isClaimed(_ fd: Int32) -> Bool {
+        let current = socketID(fd)
+        if current != 0, claimedDescriptors.contains(where: { $0.key != fd && $0.value == current }) { return true }
+        guard let recorded = claimedDescriptors[fd] else { return false }
+        if recorded == 0 || current == 0 || recorded == current { return true }
+        claimedDescriptors[fd] = nil
+        return false
+    }
+
+    private static func findTunnelFileDescriptor() -> Int32? {
         var ctlInfo = ctl_info()
         withUnsafeMutablePointer(to: &ctlInfo.ctl_name) {
             $0.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: $0.pointee)) {
                 _ = strcpy($0, "com.apple.net.utun_control")
             }
         }
-        for fd: Int32 in 0...1024 where !claimed.contains(fd) {
+        // Wombat: every open descriptor, not just 0...1024 (a long-lived process can hold more).
+        let limit = min(max(getdtablesize(), 1025), 1 << 16)
+        for fd: Int32 in 0..<limit {
             var addr = sockaddr_ctl()
             var ret: Int32 = -1
             var len = socklen_t(MemoryLayout.size(ofValue: addr))
@@ -103,7 +136,7 @@ public class WireGuardAdapter {
                     continue
                 }
             }
-            if addr.sc_id == ctlInfo.ctl_id {
+            if addr.sc_id == ctlInfo.ctl_id && !isClaimed(fd) {
                 return fd
             }
         }
@@ -172,7 +205,10 @@ public class WireGuardAdapter {
         // still reach this tunnel's log (the handler holds no reference to the adapter).
         if let fd = claimedDescriptor {
             Self.claimLock.lock()
-            Self.claimedDescriptors.remove(fd)
+            // Wombat: only this adapter's claim; a newer tunnel's on the same number stays.
+            if let recorded = Self.claimedDescriptors[fd], recorded == claimedSocket || recorded == 0 || claimedSocket == 0 {
+                Self.claimedDescriptors[fd] = nil
+            }
             Self.claimLock.unlock()
         }
 
