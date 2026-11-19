@@ -623,6 +623,11 @@ enum SSODataStore {
                 waited += 1
             }
         }
+        // The class method doesn't start WebKit: with no web view or store made since launch,
+        // its completion is sent to a main run loop WebKit never set up, and the app crashes
+        // (1.4.8 report, 2026-11-19: Delete or Forget Sign-In Data before any sign-in). Asking
+        // for the default store starts WebKit first; it loads no page and keeps no data.
+        _ = WKWebsiteDataStore.default()
         for attempt in 0..<2 {
             do {
                 try await WKWebsiteDataStore.remove(forIdentifier: id)
