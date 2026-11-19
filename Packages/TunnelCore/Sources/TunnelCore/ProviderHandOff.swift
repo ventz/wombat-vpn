@@ -11,7 +11,7 @@ import Foundation
 /// Operation not permitted" at every launch). From then on the app can't reach the extension,
 /// every AnyConnect connect fails with the hand-off error, and only a reboot or turning the
 /// extension off and on recreates the job. Seen on this project's own Mac (1.4.6 → 1.4.8),
-/// matching Spencer's 1.4.6 report, issue #4 and the 1.4.5 report.
+/// matching a user's 1.4.6 report, issue #4 and the 1.4.5 report.
 ///
 /// Trust: macOS delivers provider messages only from the app that owns the VPN configuration,
 /// and the extension accepts one only for its own waiting start, with the start's own nonce
