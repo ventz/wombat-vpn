@@ -17,6 +17,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let stateLock = NSLock()
     private var stopped = false
     private let handOffQueue = DispatchQueue(label: "net.vpetkov.wombat.tunnel.handoff")
+    /// While this provider lives the process doesn't quit for a replacement.
+    private let lifetime = ProviderLifetime()
 
     private lazy var adapter: WireGuardAdapter = {
         WireGuardAdapter(with: self) { [weak self] level, message in

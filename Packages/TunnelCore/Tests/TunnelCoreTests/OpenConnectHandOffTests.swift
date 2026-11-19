@@ -133,7 +133,7 @@ import Testing
         #expect(HandOffDiagnosis.unreachableMessage.contains("Wombat OpenConnect"))
     }
 
-    /// A refusal is an answer: the extension was reached, so "turn it off and on" is wrong.
+    /// A refusal is an answer: the extension was reached, so "restart the Mac" is wrong.
     @Test func aRefusalCountsAsReached() {
         let d = HandOffDiagnosis(requests: 0, profile: .older, refusals: ["save": 2, "revision": 1])
         #expect(!d.appNeverReachedExtension)
@@ -161,7 +161,7 @@ import Testing
         #expect(HandOffReport.reason(extensionReason: "The gateway ended the session", appNote: .cause("x")) == "The gateway ended the session")
     }
 
-    /// The app knows why it never got through: its cause replaces the "turn it off and on"
+    /// The app knows why it never got through: its cause replaces the "restart the Mac"
     /// advice, which would be wrong then (review M1).
     @Test func appCauseReplacesTheUnreachableAdvice() {
         let reason = HandOffReport.reason(extensionReason: HandOffDiagnosis.unreachableMessage,

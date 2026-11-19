@@ -12,6 +12,14 @@ struct ContentView: View {
     @State private var showingAddTailnet = false
     @State private var dropTargeted = false
 
+    /// The first extension whose launchd job lost its XPC service, if the user has VPNs in it.
+    private var lostServiceInstaller: ExtensionInstaller? {
+        if installer.serviceMissing, store.tunnels.contains(where: { $0.engine == .wireGuard }) { return installer }
+        if openConnectInstaller.serviceMissing, store.tunnels.contains(where: \.isOpenConnect) { return openConnectInstaller }
+        if model.tailnetInstaller.serviceMissing, store.tunnels.contains(where: \.isTailnet) { return model.tailnetInstaller }
+        return nil
+    }
+
     var body: some View {
         NavigationSplitView {
             SidebarView(selection: $model.selection)
@@ -28,6 +36,9 @@ struct ContentView: View {
                         ExtensionBanner(installer: openConnectInstaller)
                     } else if model.tailnetInstaller.needsAttention, store.tunnels.contains(where: \.isTailnet) {
                         ExtensionBanner(installer: model.tailnetInstaller)
+                    } else if let lost = lostServiceInstaller {
+                        // macOS lost the extension's XPC service in an update (pitfall 43).
+                        ExtensionProblemBanner(message: lost.serviceMissingMessage)
                     } else if let problem = store.extensionProblem {
                         ExtensionProblemBanner(message: problem)
                     } else if !store.removedConfigs.isEmpty {

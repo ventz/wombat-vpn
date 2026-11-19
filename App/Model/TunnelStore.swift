@@ -992,6 +992,37 @@ final class TunnelStore: ObservableObject {
         }
     }
 
+    // MARK: After an update
+
+    static let updateDisconnectedMessage = "Wombat disconnected this VPN to install an update. Connect again to sign in."
+
+    /// The VPNs Wombat ended so macOS could replace their extension (`ExtensionInstaller`,
+    /// review security-13 H1). WireGuard and Tailnet ones connect again; an AnyConnect VPN needs
+    /// a sign-in, so it only gets a note. Never when something else is up or on demand by then:
+    /// connecting would end it or switch its on-demand off unasked.
+    func reconnectAfterUpdate(_ ids: [UUID]) async {
+        // The new extension gets its configurations first (AppModel's `.active` sync).
+        try? await Task.sleep(for: .seconds(2))
+        await reload()
+        for id in ids {
+            guard let tunnel = tunnels.first(where: { $0.id == id }), !tunnel.isActive else { continue }
+            if tunnel.isOpenConnect {
+                tunnel.lastError = Self.updateDisconnectedMessage
+                continue
+            }
+            if tunnels.contains(where: { $0.isActive || $0.isOnDemand }) {
+                log.notice("Not reconnecting \(tunnel.id, privacy: .public) after the update: another VPN is up or on demand")
+                continue
+            }
+            do {
+                try await connect(tunnel, source: "the update")
+                log.notice("Reconnected \(tunnel.id, privacy: .public) after the update")
+            } catch {
+                tunnel.lastError = "Wombat disconnected this VPN to install an update and couldn't connect it again: \(error.localizedDescription)"
+            }
+        }
+    }
+
     // MARK: Connecting
 
     /// `approved`: for a CLI connect, the tunnels the user agreed to interrupt (nil: the user
@@ -1179,8 +1210,8 @@ final class TunnelStore: ObservableObject {
                 if raw != nil, ProviderHandOffReply.decode(raw) == nil { undecodable += 1 }
                 if let reply = ProviderHandOffReply.decode(raw) {
                     if reply.serviceMissing {
-                        log.error("The OpenConnect extension's XPC service is missing; the Mac needs a restart")
-                        extensionProblem = Self.openConnectServiceMissing
+                        log.error("The OpenConnect extension's XPC service is missing")
+                        extensionProblem = ExtensionService.missingMessage(engine: "OpenConnect")
                     }
                     if reply.isWorthRetrying {
                         break  // sent before the start's wait began: again in a moment (L1)
@@ -1203,7 +1234,6 @@ final class TunnelStore: ObservableObject {
         }
     }
 
-    static let openConnectServiceMissing = "macOS didn't finish updating the Wombat OpenConnect extension. AnyConnect VPNs still connect, but other changes can't reach the extension. Restart the Mac to fix it."
 
     private static func revision(_ tunnel: Tunnel) -> String {
         tunnel.proto?.providerConfiguration?[ProviderConfigKey.revision] as? String ?? ""

@@ -250,6 +250,48 @@ class SecretStore: NSObject, TunnelSecretStoreProtocol, NSXPCListenerDelegate, @
         reply(record.revision == revision)
     }
 
+    // MARK: Quitting before a replacement (1.4.9)
+
+    func quitForReplacement(reply: @escaping (Bool) -> Void) {
+        let idle = ProviderLifetime.lock.withLock { ProviderLifetime.liveUnlocked == 0 && idleForReplacement() }
+        guard idle else {
+            log.notice("Not quitting before the replacement: a VPN is running")
+            return reply(false)
+        }
+        log.notice("Quitting before macOS replaces this extension (no VPN running)")
+        reply(true)
+        // After the reply has gone out; checked again, since a start may have begun meanwhile.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [self] in quitIfStillIdle() }
+    }
+
+    /// Whatever else must be idle (the OpenConnect extension: no start or held session). Called
+    /// under `ProviderLifetime.lock` (and, for the final check, `lock`); if it takes a lock of its
+    /// own it must exit inside it when `exit` is set, so nothing is accepted between check and
+    /// exit (security-13 L1).
+    func idleForReplacement(exit: Bool = false) -> Bool {
+        if exit { _exit(0) }
+        return true
+    }
+
+    /// The final check and the exit as one step. Lock order: provider lock (no provider can be
+    /// made in between), store lock (no record is half written), then the subclass's own (the
+    /// OpenConnect session lock; `remove` → `onForget` → `dropSession` takes them in that order
+    /// too). `_exit`: no atexit handlers run while other threads exist (security-2 N4). launchd
+    /// starts a fresh process on demand.
+    private func quitIfStillIdle() {
+        ProviderLifetime.lock.withLock {
+            guard ProviderLifetime.liveUnlocked == 0 else {
+                log.notice("Not quitting before the replacement after all: a VPN started")
+                return
+            }
+            lock.withLock {
+                if !idleForReplacement(exit: true) {
+                    log.notice("Not quitting before the replacement after all: a VPN started")
+                }
+            }
+        }
+    }
+
     // MARK: Helpers
 
     func file(_ id: String) -> URL { directory.appendingPathComponent(id.lowercased() + ".json") }

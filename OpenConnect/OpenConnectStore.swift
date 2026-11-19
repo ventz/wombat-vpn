@@ -110,6 +110,16 @@ final class OpenConnectStore: SecretStore, OpenConnectStoreProtocol, @unchecked 
         sessionLock.withLock { _ = sessions.drop(key, ifLatestStart: token, nonce: nonce, receivedBy: cutoff) }
     }
 
+    /// No start running and no sign-in waiting for one: quitting would lose a session.
+    override func idleForReplacement(exit: Bool = false) -> Bool {
+        sessionLock.withLock {
+            let idle = sessions.runningStarts(excluding: nil) == 0 && sessions.count == 0
+            // Under the session lock: no session can be accepted between the check and the exit.
+            if idle, exit { _exit(0) }
+            return idle
+        }
+    }
+
     // MARK: Self-restart (decision 1-B)
 
     /// What the self-restart rule sees now, for a start failing with no request from the app.

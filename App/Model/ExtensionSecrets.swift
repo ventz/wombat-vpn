@@ -111,6 +111,32 @@ enum ExtensionSecrets {
         }
     }
 
+    /// Asks the extension to quit before macOS replaces it (1.4.9). true only when it said it
+    /// will; an extension that isn't running, is older than 1.4.9, or runs a VPN answers false.
+    /// Never retried: an interruption here is most likely the quit itself.
+    /// At most 3 s: an extension that never answers mustn't hold up the update (security-13 H4).
+    static func quitForReplacement(_ engine: Engine) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask { @MainActor in
+                do {
+                    try await call(engine, retryInterruptions: false) { proxy, done in
+                        proxy.quitForReplacement { done($0 ? nil : "busy") }
+                    }
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(3))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+    }
+
     /// A failed lookup means "not running"; an interruption is retried (`interruptedRetries`) and,
     /// if it persists, treated the same way. Anything else (a code-signing mismatch above all) is a
     /// real failure and must not be quietly queued (audit S3-L4). Every XPC error has the same

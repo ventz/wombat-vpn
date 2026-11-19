@@ -51,6 +51,12 @@ enum CodeSigning {
     /// Removes the caller's records whose ids are not in `ids` (tunnels deleted while the
     /// extension was unreachable, or removed in System Settings). Returns how many went.
     func prune(keeping ids: [String], reply: @escaping (Int) -> Void)
+    /// Just before macOS replaces this extension (1.4.9): quit if no VPN runs in this process, so
+    /// the replacement finds no old process still exiting, the race that leaves the new launchd
+    /// job without its Mach service (CLAUDE.md pitfall 43). Replies whether it will quit. An
+    /// extension older than 1.4.9 doesn't know this call: the connection ends, which the app reads
+    /// as "won't quit".
+    func quitForReplacement(reply: @escaping (Bool) -> Void)
 }
 
 /// The OpenConnect extension's service: the same write-only store for profiles (which hold no

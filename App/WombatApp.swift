@@ -204,6 +204,14 @@ final class AppModel: ObservableObject {
                 guard let self else { return }
                 Task { await self.store.reload(); await self.store.syncToExtension() }
             }
+        // VPNs ended so macOS could replace their extension come back (or say why not).
+        let reconnect: ([UUID]) -> Void = { [weak self] ids in
+            guard let self else { return }
+            Task { await self.store.reconnectAfterUpdate(ids) }
+        }
+        installer.onReplaced = reconnect
+        openConnectInstaller.onReplaced = reconnect
+        tailnetInstaller.onReplaced = reconnect
         store.needsOpenConnect = { [weak self] in self?.openConnectInstaller.activateIfNeeded() }
         store.needsTailnet = { [weak self] in self?.tailnetInstaller.activateIfNeeded() }
         store.openConnectBlocker = { [weak self] in

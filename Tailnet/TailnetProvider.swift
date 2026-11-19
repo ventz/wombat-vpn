@@ -27,6 +27,8 @@ final class TailnetProvider: NEPacketTunnelProvider {
     private var applying = false
     private var pendingPlanJSON: Data?
     private var ownerWatch: ConsoleOwnerWatch?
+    /// While this provider lives the process doesn't quit for a replacement.
+    private let lifetime = ProviderLifetime()
 
     private var store: TailnetStore { SecretStore.shared as! TailnetStore }
     private var isStopped: Bool { stateLock.withLock { stopped } }

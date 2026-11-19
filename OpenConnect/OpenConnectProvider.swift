@@ -39,6 +39,8 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
     /// This start waits for the app's hand-off (under `stateLock`): only then does the backup
     /// route (`ProviderHandOff`) take a profile and session.
     private var awaitingHandOff = false
+    /// While this provider lives the process doesn't quit for a replacement.
+    private let lifetime = ProviderLifetime()
 
     private var store: OpenConnectStore { SecretStore.shared as! OpenConnectStore }
 

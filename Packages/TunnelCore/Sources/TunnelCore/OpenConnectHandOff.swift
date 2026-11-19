@@ -248,9 +248,9 @@ public struct HandOffDiagnosis: Equatable, Sendable {
     /// while the old one was still exiting, and the new one never got its service (ProviderHandOff
     /// has the story). Restarting the extension can't fix that; restarting the Mac does, and
     /// turning the extension off and on would also remove its VPNs.
-    public static let serviceMissingMessage = "macOS didn't finish updating the Wombat OpenConnect extension, so Wombat can't reach it to hand over this VPN's sign-in. Restart the Mac to fix it."
+    public static let serviceMissingMessage = "macOS didn't finish updating the Wombat OpenConnect extension, so Wombat can't reach it to hand over this VPN's sign-in. Restart the Mac, then connect again."
 
-    public static let unreachableMessage = "Wombat couldn't reach the OpenConnect extension to hand over this VPN's sign-in. Turn “Wombat OpenConnect” off and on in System Settings › General › Login Items & Extensions › Extensions › Network Extensions (ⓘ), then connect again. If that doesn't help, restart the Mac."
+    public static let unreachableMessage = "Wombat couldn't reach the “Wombat OpenConnect” extension to hand over this VPN's sign-in. Connect again in a few seconds; if it fails again, restart the Mac."
 }
 
 /// The extensions' texts for a start whose hand-off didn't arrive in time, kept here so the
@@ -292,14 +292,14 @@ public enum HandOffReport {
         HandOffTimeoutText.all.contains { reason.hasPrefix($0) }
     }
 
-    /// The extension's texts that carry advice of their own ("turn it off and on", "is restarting").
+    /// The extension's texts that carry advice of their own ("restart the Mac", "is restarting").
     public static let adviceTexts = [HandOffDiagnosis.unreachableMessage, ExtensionSelfRestart.message, HandOffDiagnosis.serviceMissingMessage]
 
     public static func reason(extensionReason: String, appNote: AppHandOffNote?) -> String {
         guard let appNote, !appNote.text.isEmpty, isHandOffTimeout(extensionReason) else { return extensionReason }
         if adviceTexts.contains(where: { extensionReason.hasPrefix($0) }) {
             switch appNote {
-            // The app knows why it never got through: "turn the extension off and on" or "it is
+            // The app knows why it never got through: "restart the Mac" or "it is
             // restarting" would be the wrong advice (review M1).
             case .cause(let cause): return "Wombat couldn't hand over this VPN's sign-in: \(cause)"
             // The same silence seen from the app's side: the extension's advice stands.
@@ -334,7 +334,7 @@ public enum AppLogMerge {
 /// starts a fresh copy on the next connect. Meant to do automatically what killing "the
 /// openconnect processes" by hand did in GitHub issue #4; whether this process was the deaf one
 /// there is not known (if a different, older process holds the service, this exit doesn't help,
-/// and the second failure shows the "turn it off and on" advice). "Nothing reached it" is
+/// and the second failure shows the "restart the Mac" advice). "Nothing reached it" is
 /// inferred from silence, so it also fires when the app failed before any XPC call; harmless, the
 /// process is idle and starts fresh. The one sanctioned exception to "no exit in the extension"
 /// (pitfall 12): one process serves every AnyConnect tunnel and the XPC listener, so it may go
@@ -345,7 +345,7 @@ public enum AppLogMerge {
 /// lack that flag (System Settings) never gets here. The app is what sets it, but other processes
 /// may be able to pass start options too (`SCNetworkConnectionStart`; not verified), so nothing
 /// relies on that: a second restart within `minimumInterval` is refused (the time is kept in the
-/// extension's root-only container) and the user is told to turn the extension off and on.
+/// extension's root-only container) and the user is told to restart the Mac.
 ///
 /// Why another process can't use it for worse than a reconnect: it fires only after a start
 /// that already failed (and that start already stopped any other VPN, as any start does); it
@@ -412,7 +412,7 @@ public enum ExtensionSelfRestart {
 
     /// Shown before the exit, so it says "is restarting", and asks for a short wait: a connect
     /// within the delay keeps the old process (review round 2, S1).
-    public static let message = "Wombat couldn't hand over this VPN's sign-in to its OpenConnect extension, so the extension is restarting. Wait a few seconds, then connect again. If this keeps happening, turn “Wombat OpenConnect” off and on in System Settings › General › Login Items & Extensions › Extensions › Network Extensions (ⓘ), or restart the Mac."
+    public static let message = "Wombat couldn't hand over this VPN's sign-in to its OpenConnect extension, so the extension is restarting. Wait a few seconds, then connect again. If this keeps happening, restart the Mac."
 
     /// The public line logged right before the exit.
     public static let logLine = "Restarting the OpenConnect extension: nothing from Wombat reached it during the hand-off wait, and no tunnel or sign-in is held"
