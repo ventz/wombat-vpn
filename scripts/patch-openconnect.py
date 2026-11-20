@@ -96,6 +96,54 @@ PATCHES = [
      "\t\tif (this->len > vpninfo->deflate_pkt_size) /* Wombat: never exceed the buffer */\n"
      "\t\t\treturn -EFBIG;\n"
      "\t\tif (this->len < 40)\n"),
+    # 12. A DTLS record typed 0x08 (compressed) when no compression was negotiated ended the whole
+    #     session ("Unknown packet received", then a BYE), while every other unknown type is dropped
+    #     as possible OpenSSL garbage (upstream's comment in the default case). One such record
+    #     killed a 6-hour session on a gateway that announced no compression (patch 5 didn't trip;
+    #     2026-11-20). Now it is dropped too, never decompressed (patch 5's rule holds), and logged
+    #     at PRG_INFO with its length and first 4 bytes so the next one is diagnosable. 3 drops in
+    #     one 60 s window (a fixed window; it also restarts if the clock steps back) mean something
+    #     is really wrong with the DTLS channel: close it and carry on over TLS for the rest of the
+    #     session (upstream's "Disabling DTLS" steps in openssl-dtls.c, minus freeing dtls_ctx,
+    #     which goes with vpninfo). The strings skip _() on purpose: DTLSDiagnosticLine (Swift)
+    #     matches them exactly, and a translation must not change them. Upstream's unknown_pkt
+    #     label is left unreferenced (one -Wunused-label warning, expected).
+    ("openconnect-internal.h",
+     "\tint dtls_attempt_period;\n",
+     "\tint dtls_attempt_period;\n"
+     "\ttime_t wombat_dtls_compr_since; /* Wombat: patch 12 */\n"
+     "\tint wombat_dtls_compr_drops;\n"),
+    ("dtls.c",
+     "\t\t\tif (!vpninfo->dtls_compr) {\n"
+     "\t\t\t\tvpn_progress(vpninfo, PRG_ERR,\n"
+     "\t\t\t\t\t     _(\"Compressed DTLS packet received when compression not enabled\\n\"));\n"
+     "\t\t\t\tgoto unknown_pkt;\n"
+     "\t\t\t}\n",
+     "\t\t\tif (!vpninfo->dtls_compr) {\n"
+     "\t\t\t\t/* Wombat: drop it like other unknown types (no quit, no BYE), never\n"
+     "\t\t\t\t * decompress it; repeats fall back to TLS for the session. */\n"
+     "\t\t\t\ttime_t wombat_now = time(NULL);\n"
+     "\n"
+     "\t\t\t\tif (wombat_now < vpninfo->wombat_dtls_compr_since ||\n"
+     "\t\t\t\t    wombat_now - vpninfo->wombat_dtls_compr_since >= 60) {\n"
+     "\t\t\t\t\tvpninfo->wombat_dtls_compr_since = wombat_now;\n"
+     "\t\t\t\t\tvpninfo->wombat_dtls_compr_drops = 0;\n"
+     "\t\t\t\t}\n"
+     "\t\t\t\tvpninfo->wombat_dtls_compr_drops++;\n"
+     "\t\t\t\tvpn_progress(vpninfo, PRG_INFO,\n"
+     "\t\t\t\t\t     \"Dropped an unexpected compressed DTLS packet (%d bytes, starts %02x %02x %02x %02x; %d within 60 s)\\n\",\n"
+     "\t\t\t\t\t     len, buf[0], len > 1 ? buf[1] : 0, len > 2 ? buf[2] : 0,\n"
+     "\t\t\t\t\t     len > 3 ? buf[3] : 0, vpninfo->wombat_dtls_compr_drops);\n"
+     "\t\t\t\tif (vpninfo->wombat_dtls_compr_drops >= 3) {\n"
+     "\t\t\t\t\tvpn_progress(vpninfo, PRG_INFO,\n"
+     "\t\t\t\t\t\t     \"Unexpected compressed DTLS packets keep arriving; using TLS only for this session\\n\");\n"
+     "\t\t\t\t\tdtls_close(vpninfo);\n"
+     "\t\t\t\t\tvpninfo->dtls_attempt_period = 0;\n"
+     "\t\t\t\t\tvpninfo->dtls_state = DTLS_DISABLED;\n"
+     "\t\t\t\t\treturn 1;\n"
+     "\t\t\t\t}\n"
+     "\t\t\t\tbreak;\n"
+     "\t\t\t}\n"),
     # 4. Defense in depth for every packet buffer: a negative or absurd length can no longer
     #    wrap the int size (alloc_pkt is the one allocator for CSTP, DTLS and ESP packets).
     ("openconnect-internal.h",
@@ -112,4 +160,4 @@ for name, old, new in PATCHES:
     if count != 1:
         sys.exit(f"patch-openconnect: expected one anchor in {name}, found {count}: {old[:60]!r}")
     path.write_text(text.replace(old, new))
-print(f"patch-openconnect: applied {len(PATCHES)} patches")
+print(f"patch-openconnect: applied {len(PATCHES)} substitutions")

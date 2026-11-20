@@ -157,4 +157,26 @@ import Testing
         try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: path)
         #expect(throws: PrivateFile.Failure.self) { try PrivateFile.write(Data("x".utf8), to: link) }
     }
+
+    /// Patch 12's lines (dtls.c) go to the system log publicly; nothing else may. The same text is
+    /// pinned on the C side by scripts/dev/dtls-stray-record.c: change both together.
+    @Test func dtlsDiagnosticLinesArePublicOnlyWhenExact() {
+        let drop = "Dropped an unexpected compressed DTLS packet (1287 bytes, starts 08 22 80 00; 1 within 60 s)\n"
+        #expect(DTLSDiagnosticLine.isPublic(drop))
+        #expect(DTLSDiagnosticLine.isPublic("Unexpected compressed DTLS packets keep arriving; using TLS only for this session\n"))
+        #expect(LogScrubber.scrub(drop.trimmingCharacters(in: .newlines)) == drop.trimmingCharacters(in: .newlines))
+        // The extension's order: scrub first (trailing newline still there), then match.
+        #expect(DTLSDiagnosticLine.isPublic(LogScrubber.scrub(drop)))
+        #expect(DTLSDiagnosticLine.isPublic("Dropped an unexpected compressed DTLS packet (1 bytes, starts 08 00 00 00; 1 within 60 s)"))
+        #expect(!DTLSDiagnosticLine.isPublic(LogScrubber.scrub(drop.trimmingCharacters(in: .newlines) + "\r\nX-CSTP-Address: 10.1.2.3")))
+        for line in ["Dropped an unexpected compressed DTLS packet (1287 bytes, starts 08 22 80 00; 1 within 60 s) vpn.example.edu",
+                     "x Dropped an unexpected compressed DTLS packet (1 bytes, starts 08 00 00 00; 1 within 60 s)",
+                     "Dropped an unexpected compressed DTLS packet (12 bytes, starts 08 zz 80 00; 1 within 60 s)",
+                     "Unexpected compressed DTLS packets keep arriving; using TLS only for this session vpn.example.edu",
+                     "Dropped an unexpected compressed DTLS packet (12 bytes, starts 08 2A 80 00; 1 within 60 s)",
+                     "Compressed DTLS packet received when compression not enabled",
+                     "X-CSTP-Address: 10.1.2.3"] {
+            #expect(!DTLSDiagnosticLine.isPublic(line), "\(line)")
+        }
+    }
 }

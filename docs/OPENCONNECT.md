@@ -175,6 +175,7 @@ sign-in there needs a real account.
 scripts/dev/ocserv-peer.sh up            # ocserv in Docker on 127.0.0.1: password, then a one-time code
 scripts/dev/ocserv-peer.sh up --cert     # client certificate plus password
 scripts/dev/oc-probe.sh                  # Swift sign-in + libopenconnect tunnel, outside NetworkExtension
+scripts/dev/dtls-stray-record.sh         # patch 12: stray DTLS 0x08 record through the real dtls_mainloop
 (cd Packages/TunnelCore && WOMBAT_OCSERV_LIVE=1 swift test --filter AnyConnectLive)
 ```
 

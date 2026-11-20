@@ -8,8 +8,9 @@ libraries into `build/openconnect/`.
 
 ## What Wombat changes
 
-Eleven security patches, applied by `scripts/patch-openconnect.py` as checked substitutions (the
-build fails if an anchor moves), all found in Wombat's audits (round 5b, 2026-10-16):
+Twelve patches, applied by `scripts/patch-openconnect.py` as checked substitutions (the build
+fails if an anchor moves). 1-11 are security fixes found in Wombat's audits (round 5b,
+2026-10-16); 12 keeps a stray DTLS record from ending the session (2026-11-20):
 
 1. `cstp.c`: the gateway's MTU (`X-CSTP-MTU`, `X-DTLS-MTU`) must be 1-16384. Unbounded, a value
    near 2^31 wrapped `alloc_pkt`'s `int` size to a 2 KB buffer that the CSTP read could then fill
@@ -27,6 +28,14 @@ build fails if an anchor moves), all found in Wombat's audits (round 5b, 2026-10
 10. `cstp.c`: the decoded STRAP private key is wiped (`OPENSSL_cleanse`) and freed after use.
 11. `cstp.c`: LZS/LZ4 are never told the destination is larger than `deflate_pkt_size` (defense
     in depth; unreachable while we request no compression, patch 5).
+12. `dtls.c` (+ two fields, window start and count, in `openconnect-internal.h`): a DTLS record
+    typed 0x08 (compressed) when no compression was negotiated is dropped, like every other
+    unknown type, instead of ending the session ("Unknown packet received" and a BYE). It is
+    never decompressed (patch 5's rule holds). Each drop is logged at PRG_INFO with its length
+    and first 4 bytes; 3 drops in one 60 s window close DTLS and the session carries on over TLS.
+    The CSTP (TLS) equivalent stays fatal: TLS can't deliver garbage, and every unknown CSTP
+    packet is fatal upstream too. Proof: `scripts/dev/dtls-stray-record.sh`. Expected build
+    warning: upstream's `unknown_pkt` label in dtls.c is now unused.
 
 Patch 3 also caps the headers at 1 MiB in total.
 

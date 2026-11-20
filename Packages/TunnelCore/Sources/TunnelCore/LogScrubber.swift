@@ -275,3 +275,24 @@ public enum LogBudget {
         return (Array(lines.suffix(kept)), lines.count - kept)
     }
 }
+
+/// libopenconnect lines Wombat's own patch 12 prints (Vendor/openconnect/WOMBAT.md) when a DTLS
+/// record arrives typed "compressed" without compression negotiated. They hold only numbers and
+/// fixed text (no gateway name, address or payload beyond 4 bytes), so the extension may log
+/// them publicly in the system log for `log show`. The match is exact: any other line, including
+/// gateway text that imitates one, stays private.
+public enum DTLSDiagnosticLine {
+    /// A pattern that fails to compile is left out, so nothing is public (fail closed).
+    private static let patterns: [NSRegularExpression] = [
+        #"^Dropped an unexpected compressed DTLS packet "#
+            + #"\([0-9]{1,6} bytes, starts(?: [0-9a-f]{2}){4}; [0-9]{1,9} within 60 s\)$"#,
+        #"^Unexpected compressed DTLS packets keep arriving; using TLS only for this session$"#
+    ].compactMap { try? NSRegularExpression(pattern: $0) }
+
+    public static func isPublic(_ line: String) -> Bool {
+        let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.utf8.count <= 160 else { return false }
+        let range = NSRange(text.startIndex..., in: text)
+        return patterns.contains { $0.firstMatch(in: text, range: range) != nil }
+    }
+}

@@ -548,8 +548,9 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
         completionHandler(error)
     }
 
-    /// Engine lines name the gateway and addresses: private in the system log. Some carry text
-    /// the gateway sent (the CONNECT status line, X-Reason), cleaned to one line (review NEW-8).
+    /// Engine lines name the gateway and addresses: private in the system log, except patch 12's
+    /// numbers-only DTLS lines (`DTLSDiagnosticLine`). Some carry text the gateway sent (the
+    /// CONNECT status line, X-Reason), cleaned to one line (review NEW-8).
     /// Debug-level lines (debug logging) go only to the Log tab, never the system log (quality-10
     /// M3), and only until the deadline.
     private func engineLog(_ level: Int32, _ message: String) {
@@ -558,7 +559,15 @@ final class OpenConnectProvider: NEPacketTunnelProvider {
             return recentLog.append(message)
         }
         let message = LogScrubber.scrub(message)
-        if level == PRG_ERR { log.error("engine: \(message, privacy: .private)") } else { log.debug("engine: \(message, privacy: .private)") }
+        if level == PRG_INFO, DTLSDiagnosticLine.isPublic(message) {
+            // Patch 12's numbers-only lines: public and at notice level, so `log show` finds them
+            // without debug logging (an unexpected "compressed" DTLS record, 2026-11-20).
+            log.notice("engine: \(message, privacy: .public)")
+        } else if level == PRG_ERR {
+            log.error("engine: \(message, privacy: .private)")
+        } else {
+            log.debug("engine: \(message, privacy: .private)")
+        }
         recentLog.append(message)
     }
 }

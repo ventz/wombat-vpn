@@ -148,7 +148,8 @@ for ext in "${extensions[@]}"; do
         [[ -s "$ext/Contents/Resources/$license" ]] || { echo "missing $license in $ext" >&2; exit 1; }
     done
     marks=$(strings "$binary")
-    for mark in "Gateway sent an invalid MTU" "Gateway sent too many headers" "Gateway chose a compression that wasn't requested"; do
+    for mark in "Gateway sent an invalid MTU" "Gateway sent too many headers" "Gateway chose a compression that wasn't requested" \
+                "Dropped an unexpected compressed DTLS packet"; do
         [[ "$marks" == *"$mark"* ]] || { echo "libopenconnect in $binary lacks the patch message: $mark" >&2; exit 1; }
     done
 done

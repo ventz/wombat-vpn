@@ -189,6 +189,7 @@ and four junk packets, and no packet begins with WireGuard's `01 00 00 00` heade
 scripts/dev/ocserv-peer.sh up            # ocserv in Docker on 127.0.0.1:4443: password + one-time code
 scripts/dev/ocserv-peer.sh up --cert     # client certificate + password
 scripts/dev/oc-probe.sh                  # Swift sign-in + libopenconnect tunnel phase, no NetworkExtension
+scripts/dev/dtls-stray-record.sh         # patch 12: stray DTLS 0x08 record through the real dtls_mainloop
 (cd Packages/TunnelCore && WOMBAT_OCSERV_LIVE=1 swift test --filter AnyConnectLive)
 scripts/dev/ocserv-peer.sh otp           # the current one-time code, for signing in by hand
 ```
